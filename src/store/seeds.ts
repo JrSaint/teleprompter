@@ -35,7 +35,7 @@ The screen stayed with you the whole way through. Check the numbers in the corne
 
 Cada frase aparece grande no centro, com a próxima esperando embaixo. Nada fica rolando nesta tela. Ela só avança quando você fala.
 
-Agora leia esta frase em voz alta, depois pare e improvise sobre outro assunto, como o tempo, por uns oito segundos. Quando quiser voltar, leia esta linha aqui.
+Agora leia esta frase em voz alta, depois pare e improvise sobre outro assunto, como comida, por uns oito segundos. Quando quiser voltar, leia esta linha aqui.
 
 Muito bem. O prompter esperou por você e te encontrou de novo assim que você voltou.
 

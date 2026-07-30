@@ -203,6 +203,58 @@ describe('matcher', () => {
     expect(m.current).toBe(2);
   });
 
+  it('RC1: one untranscribable loanword cannot hold a phrase hostage (all-but-one)', () => {
+    // Siri pt-BR never emits "prompter"; with 3 content words, matching
+    // all but one must complete the phrase
+    const { m, phrases } = build('We walked the hill prompter. Something else entirely follows here.');
+    const content0 = phrases[0].contentIdx.length;
+    expect(content0).toBeGreaterThanOrEqual(3);
+    const r = m.feed(['walked', 'hill']); // everything except the loanword
+    expect(r.events.some((e) => e.rule === 'all-but-one')).toBe(true);
+    expect(m.current).toBe(1);
+  });
+
+  it('RC1: all-but-one does not apply to 2-content phrases', () => {
+    const { m } = build('The prompter waited. Something else entirely follows here.');
+    m.feed(['prompter']); // 1 of 2 content, not the final word — must NOT complete
+    expect(m.current).toBe(0);
+  });
+
+  it('RC2: a short (≤3-letter) final content word cannot advance alone, even exact', () => {
+    const { m, phrases } = build('Keep the faith and joy. Another sentence comes right after.');
+    const finalTok = phrases[0].tokens[phrases[0].contentIdx[phrases[0].contentIdx.length - 1]];
+    expect(finalTok).toBe('joy');
+    const r = m.feed(['joy']); // stray exact hit, zero other evidence
+    expect(r.events.length).toBe(0);
+    expect(m.current).toBe(0);
+    // with half the phrase behind it, the same word completes normally
+    m.feed(['keep', 'faith', 'joy']);
+    expect(m.current).toBe(1);
+  });
+
+  it('RC3: a duplicated word never cross-credits a similar token (este→teste)', () => {
+    const { m } = build('Este é o teste de sessenta segundos agora.', 'pt-BR');
+    m.feed(['este']);
+    const before = m.contentMatchedCount(0);
+    m.feed(['este']); // duplicate interim re-emission
+    expect(m.contentMatchedCount(0)).toBe(before); // "teste" NOT credited
+    expect(m.current).toBe(0);                      // and no advance
+    // the real word still lands afterwards and completes the phrase
+    m.feed(['teste']);
+    expect(m.current).toBe(1);
+  });
+
+  it('every advance and jump carries evidence ≥ 1', () => {
+    const { m } = build('We begin tonight. The river was rising fast. Nothing else moved there.');
+    const all = [
+      ...m.feed(['we', 'begin', 'tonight']).events,
+      ...m.feed(['the', 'river', 'was', 'rising', 'fast']).events,
+      ...m.feed(['nothing', 'else', 'moved', 'there']).events,
+    ];
+    expect(all.length).toBeGreaterThanOrEqual(2);
+    for (const e of all) expect(e.evidence).toBeGreaterThanOrEqual(1);
+  });
+
   it('supports manual navigation including backward', () => {
     const { m } = build('One two three four. Five six seven eight. Nine ten eleven twelve.');
     m.feed(['one', 'two', 'three', 'four']);

@@ -1,5 +1,5 @@
 import { parseInline } from './markup';
-import { normalizeWord, isStopword, isConjunction, type Lang } from './text';
+import { normalizeWord, bareWord, isStopword, isConjunction, type Lang } from './text';
 
 /** One display word, carrying its markup tag (if any). */
 export interface PhraseWord {
@@ -97,9 +97,10 @@ function tokenize(body: string, lang: Lang): RawWord[] {
     words.push({ text, tag: w.tag, breakAfter: ba });
   }
 
-  // conjunction rule: prefer to break BEFORE these words
+  // conjunction rule: prefer to break BEFORE these words (unfolded
+  // comparison — "é" must not be mistaken for the conjunction "e")
   for (let i = 1; i < words.length; i++) {
-    if (isConjunction(normalizeWord(words[i].text), lang)) {
+    if (isConjunction(bareWord(words[i].text), lang)) {
       if (words[i - 1].breakAfter < 1) words[i - 1].breakAfter = 1;
     }
   }

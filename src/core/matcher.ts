@@ -28,6 +28,8 @@ export type MatchRule =
   | 'final-exact'      // exact hit on the final content word
   | 'final-fuzzy'      // fuzzy final-word hit with ≥finalWordMinPct support
   | 'content-70'       // ≥advancePct of content words matched
+  | 'all-but-one'      // ≥3 content words and all but one matched — no
+                       //   single unmatchable word (loanword) vetoes
   | 'boundary-rescue'  // ≥rescuePct matched AND next phrase already started
   | 'restart-grace'    // post-restart grace: next-phrase evidence alone
   | 'far-skip'         // later phrase ≥advancePct while current <skip gate
@@ -37,6 +39,10 @@ export interface MatchEvent {
   type: 'advance' | 'jump';
   to: number; // new current phrase index
   rule: MatchRule;
+  /** Content-word hits backing the move at fire time: the from-phrase's
+      count for advances, the target's for jumps, the next phrase's
+      unambiguous count for grace. Proves no zero-evidence moves. */
+  evidence: number;
 }
 
 export interface FeedOptions {
@@ -58,6 +64,14 @@ export class PhraseMatcher {
   private exact = new Map<number, Set<number>>();   // subset matched exactly
   private fresh = new Map<number, number>();        // unambiguous content hits
   private touchedCurrent = false; // a word matched the phrase WHILE current
+  /** After an all-but-one advance: the completed phrase's unmatched
+      tokens. The immediately following word, if it matches one of
+      them, is the tail of the OLD phrase — absorb it so it can't rush
+      an identical next phrase. */
+  private leftover: string[] | null = null;
+  /** Previous fed word — a consecutive duplicate (interim re-emission)
+      may exact-match a genuinely repeated token but never fuzzy-match. */
+  private prevWord = '';
   current = 0;
   finished = false;
 
@@ -106,11 +120,18 @@ export class PhraseMatcher {
     return this.exact.get(p)?.has(finalIdx) ? 'exact' : 'fuzzy';
   }
 
+  /** The phrase's final content token itself (for the short-word gate). */
+  private finalContentToken(p: number): string {
+    const ph = this.phrases[p];
+    if (!ph || ph.contentIdx.length === 0) return '';
+    return ph.tokens[ph.contentIdx[ph.contentIdx.length - 1]];
+  }
+
   /** Try to mark one token of phrase p as matched by word w. Returns
       the matched token index or -1. Exact matches take priority over
       fuzzy ones so a precisely spoken final word is never consumed by
       an earlier similar token. */
-  private tryMatch(p: number, w: string): number {
+  private tryMatch(p: number, w: string, allowFuzzy = true): number {
     const ph = this.phrases[p];
     if (!ph) return -1;
     let set = this.matched.get(p);
@@ -130,6 +151,14 @@ export class PhraseMatcher {
         ex.add(t);
         return t;
       }
+    }
+    // Duplicate suppression: a word identical to an already-satisfied
+    // token is a re-hearing (interim re-emission, repeated delivery) —
+    // it must not fuzzy-spill onto a different token ("este" must never
+    // cross-credit "teste" on its second arrival).
+    if (!allowFuzzy) return -1;
+    for (const t of set) {
+      if (wordsEqual(w, ph.tokens[t])) return -1;
     }
     for (let t = 0; t < ph.tokens.length; t++) {
       if (set.has(t)) continue;
@@ -160,7 +189,7 @@ export class PhraseMatcher {
     }
   }
 
-  private advanceTo(next: number, type: 'advance' | 'jump', rule: MatchRule, events: MatchEvent[]): void {
+  private advanceTo(next: number, type: 'advance' | 'jump', rule: MatchRule, evidence: number, events: MatchEvent[]): void {
     this.current = next;
     // A jump's evidence IS the speaker saying phrase j, so it counts as
     // touched; a plain advance starts the new phrase untouched.
@@ -170,7 +199,7 @@ export class PhraseMatcher {
       this.finished = true;
       this.current = this.phrases.length - 1;
     }
-    events.push({ type, to: this.current, rule });
+    events.push({ type, to: this.current, rule, evidence });
   }
 
   /**
@@ -184,18 +213,30 @@ export class PhraseMatcher {
       const w = normalizeWord(raw);
       if (!w || this.finished) continue;
 
+      // absorb the tail word of a phrase completed via all-but-one
+      if (this.leftover !== null) {
+        const lw = this.leftover;
+        this.leftover = null;
+        if (lw.some((tok) => wordsEqual(w, tok) || fuzzyMatch(w, tok))) {
+          matchedAny = true; // it's script speech, just already accounted
+          continue;
+        }
+      }
+
       // match against the current phrase and the lookahead window
       const windowEnd = Math.min(
         this.current + this.cfg.lookahead,
         this.phrases.length - 1,
       );
-      const hitCurrent = this.tryMatch(this.current, w) >= 0;
+      const dupOfPrev = w === this.prevWord;
+      this.prevWord = w;
+      const hitCurrent = this.tryMatch(this.current, w, !dupOfPrev) >= 0;
       if (hitCurrent) {
         matchedAny = true;
         this.touchedCurrent = true;
       }
       for (let p = this.current + 1; p <= windowEnd; p++) {
-        const tIdx = this.tryMatch(p, w);
+        const tIdx = this.tryMatch(p, w, !dupOfPrev);
         if (tIdx >= 0) {
           matchedAny = true;
           // only count as forward evidence when the word could NOT be
@@ -214,11 +255,24 @@ export class PhraseMatcher {
       if (!this.finished) {
         let rule: MatchRule | null = null;
         const pct = this.progress(this.current);
+        const hits = this.contentMatchedCount(this.current);
+        const contentTotal = this.phrases[this.current]?.contentIdx.length ?? 0;
         if (this.touchedCurrent) {
           const final = this.finalContentMatched(this.current);
-          if (final === 'exact') rule = 'final-exact';
+          // A final content word of ≤3 letters (normalized) is too easy
+          // to hit by accident ("é", "joy") — even an exact hit needs
+          // half the phrase's content behind it.
+          const shortFinal = this.finalContentToken(this.current).length <= 3;
+          if (
+            final === 'exact' &&
+            (!shortFinal || pct >= this.cfg.finalWordMinPct)
+          ) rule = 'final-exact';
           else if (final === 'fuzzy' && pct >= this.cfg.finalWordMinPct) rule = 'final-fuzzy';
           else if (pct >= this.cfg.advancePct) rule = 'content-70';
+          // Integer-aware completion: with ≥3 content words, all but
+          // one matched completes the phrase — one untranscribable
+          // loanword must never hold the display hostage.
+          else if (contentTotal >= 3 && hits >= contentTotal - 1) rule = 'all-but-one';
           // Boundary-crossing rescue: the phrase is half-said and the
           // speaker has audibly started the NEXT phrase — a stalled
           // half-match must not pin the display.
@@ -234,9 +288,19 @@ export class PhraseMatcher {
           rule === null &&
           opts.grace &&
           this.unambiguousEvidence(this.current + 1) >= 1
-        ) rule = 'restart-grace';
-        if (rule !== null) {
-          this.advanceTo(this.current + 1, 'advance', rule, events);
+        ) {
+          rule = 'restart-grace';
+          this.advanceTo(
+            this.current + 1, 'advance', rule,
+            this.unambiguousEvidence(this.current + 1), events,
+          );
+        } else if (rule !== null) {
+          if (rule === 'all-but-one') {
+            const ph = this.phrases[this.current];
+            const set = this.matched.get(this.current);
+            this.leftover = ph.tokens.filter((_, t) => !set?.has(t));
+          }
+          this.advanceTo(this.current + 1, 'advance', rule, hits, events);
         }
       }
 
@@ -250,7 +314,7 @@ export class PhraseMatcher {
         if (this.progress(this.current) < this.cfg.skipCurrentBelowPct) {
           for (let j = this.current + 1; j <= wEnd; j++) {
             if (this.progress(j) >= this.cfg.advancePct) {
-              this.advanceTo(j, 'jump', 'far-skip', events);
+              this.advanceTo(j, 'jump', 'far-skip', this.contentMatchedCount(j), events);
               break;
             }
           }
@@ -267,7 +331,8 @@ export class PhraseMatcher {
   forceAdvance(): MatchEvent | null {
     if (this.finished) return null;
     const events: MatchEvent[] = [];
-    this.advanceTo(this.current + 1, 'advance', 'self-heal', events);
+    const evidence = this.unambiguousEvidence(this.current + 1);
+    this.advanceTo(this.current + 1, 'advance', 'self-heal', evidence, events);
     return events[0];
   }
 
@@ -279,6 +344,7 @@ export class PhraseMatcher {
     this.exact.clear();
     this.fresh.clear();
     this.touchedCurrent = false;
+    this.leftover = null;
   }
 
   get length(): number {

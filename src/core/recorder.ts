@@ -16,7 +16,10 @@ export type SessionEvent =
       action: 'advance' | 'jump' | 'hold' | 'heal';
       rule: MatchRule | 'none';
       from: number; to: number;
+      /** match % of the FROM phrase before this feed was applied */
       curPct: number; ahead: number[];
+      /** content-word hits backing the move (0 for holds) */
+      evidence: number;
     }
   | { t: number; kind: 'mic'; status: string; detail?: string }
   | { t: number; kind: 'state'; state: string };
@@ -65,6 +68,7 @@ export class FlightRecorder {
     rule: MatchRule | 'none';
     from: number; to: number;
     curPct: number; ahead: number[];
+    evidence: number;
   }): void {
     this.push({ kind: 'decision', ...d });
   }

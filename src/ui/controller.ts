@@ -100,24 +100,29 @@ export class PrompterController {
 
     const t0 = performance.now();
     const from = this.matcher.current;
+    // Snapshot BEFORE the feed: a decision's curPct must describe the
+    // phrase the rule fired FROM, not the fresh phrase after the move
+    // (the post-move snapshot misread as "zero-evidence advances" on
+    // the first rig tape).
+    const pre = this.matcher.progressSnapshot();
     const res = this.matcher.feed(words, {
       grace: performance.now() < this.graceUntil,
     });
 
-    const snap = this.matcher.progressSnapshot();
     if (res.events.length > 0) {
       for (const e of res.events) {
         this.recorder.decision({
           action: e.type, rule: e.rule, from, to: e.to,
-          curPct: snap.pct, ahead: snap.ahead,
+          curPct: pre.pct, ahead: pre.ahead, evidence: e.evidence,
         });
-        diag.event(`${e.type} (${e.rule}) → phrase ${e.to + 1}`);
+        diag.event(`${e.type} (${e.rule}, ev ${e.evidence}) → phrase ${e.to + 1}`);
       }
       this.healed = false;
     } else if (res.matchedAny) {
+      const snap = this.matcher.progressSnapshot();
       this.recorder.decision({
         action: 'hold', rule: 'none', from, to: from,
-        curPct: snap.pct, ahead: snap.ahead,
+        curPct: snap.pct, ahead: snap.ahead, evidence: 0,
       });
     }
 
@@ -211,12 +216,12 @@ export class PrompterController {
       return;
     }
     const from = this.matcher.current;
+    const pre = this.matcher.progressSnapshot();
     const e = this.matcher.forceAdvance();
     if (!e) return;
-    const snap = this.matcher.progressSnapshot();
     this.recorder.decision({
       action: 'heal', rule: 'self-heal', from, to: e.to,
-      curPct: snap.pct, ahead: snap.ahead,
+      curPct: pre.pct, ahead: pre.ahead, evidence: e.evidence,
     });
     diag.event(`self-heal → phrase ${e.to + 1}`);
     this.healed = true;

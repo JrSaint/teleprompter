@@ -68,19 +68,29 @@ export function isStopword(token: string, lang: Lang): boolean {
   return (lang === 'pt-BR' ? STOP_PT : STOP_EN).has(token);
 }
 
+/**
+ * Lowercase + strip punctuation, KEEPING diacritics. The conjunction
+ * check must see them: folded, the Portuguese verb "é" (is) collides
+ * with the conjunction "e" (and) and breaks phrases mid-clause.
+ */
+export function bareWord(w: string): string {
+  return w.toLowerCase().replace(/[^\p{L}\p{N}]/gu, '');
+}
+
 /* Words the segmenter prefers to break BEFORE (conjunctions and
-   subordinators), per the locked break-priority rules. */
+   subordinators), per the locked break-priority rules. Compared
+   UNFOLDED (see bareWord); accented entries listed as written. */
 const CONJ_EN = new Set([
   'and', 'but', 'or', 'because', 'when', 'if', 'so', 'while',
   'after', 'before', 'unless', 'until',
 ]);
 const CONJ_PT = new Set([
-  'e', 'mas', 'ou', 'porque', 'quando', 'se', 'entao', 'enquanto',
-  'depois', 'antes', 'ate',
+  'e', 'mas', 'ou', 'porque', 'quando', 'se', 'então', 'enquanto',
+  'depois', 'antes', 'até',
 ]);
 
-export function isConjunction(token: string, lang: Lang): boolean {
-  return (lang === 'pt-BR' ? CONJ_PT : CONJ_EN).has(token);
+export function isConjunction(word: string, lang: Lang): boolean {
+  return (lang === 'pt-BR' ? CONJ_PT : CONJ_EN).has(word);
 }
 
 /* ---- Number folding -------------------------------------------------

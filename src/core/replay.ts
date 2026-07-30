@@ -60,3 +60,80 @@ export function replaySession(
     phraseCount: phrases.length,
   };
 }
+
+/* ---- de-clump mode ---------------------------------------------------
+   Safari releases recognition in delayed clumps. To measure how much of
+   the perceived lag is Safari (not us), rewrite token timestamps as if
+   each clump's words had arrived spread evenly since the previous
+   token, then compare when each advance fires. This is measurement
+   only — we do not tune the matcher to chase Safari's clump latency. */
+
+/** Tokens closer together than this are one clump. */
+const CLUMP_EPS_MS = 150;
+/** Assumed inter-word spacing when a clump opens the session. */
+const LEAD_SPACING_MS = 250;
+
+export function declumpLog(log: SessionLog, epsMs = CLUMP_EPS_MS): SessionLog {
+  const events = log.events.map((e) => ({ ...e }));
+  const toks = events.filter((e) => e.kind === 'token');
+  let i = 0;
+  while (i < toks.length) {
+    let j = i;
+    while (j + 1 < toks.length && toks[j + 1].t - toks[j].t <= epsMs) j++;
+    if (j > i) {
+      const start =
+        i === 0
+          ? Math.max(0, toks[i].t - (j - i) * LEAD_SPACING_MS)
+          : toks[i - 1].t;
+      const end = toks[j].t;
+      const n = j - i + 1;
+      for (let k = 0; k < n; k++) {
+        toks[i + k].t = Math.round(start + ((k + 1) / n) * (end - start));
+      }
+    }
+    i = j + 1;
+  }
+  events.sort((a, b) => a.t - b.t);
+  return { ...log, events };
+}
+
+export interface ClumpLagReport {
+  /** per matched advance: clumped fire time minus de-clumped fire time */
+  deltasMs: number[];
+  medianDeltaMs: number;
+  clumpedMoves: number;
+  declumpedMoves: number;
+}
+
+export function compareClumpLag(
+  log: SessionLog,
+  cfg: Partial<MatcherConfig> = {},
+): ClumpLagReport {
+  const clumped = replaySession(log, cfg);
+  const declumped = replaySession(declumpLog(log), cfg);
+  const used = new Set<number>();
+  const deltasMs: number[] = [];
+  for (const a of clumped.moves) {
+    const bIdx = declumped.moves.findIndex(
+      (b, idx) => !used.has(idx) && b.to === a.to && b.type === a.type,
+    );
+    if (bIdx >= 0) {
+      used.add(bIdx);
+      deltasMs.push(a.t - declumped.moves[bIdx].t);
+    }
+  }
+  const sorted = [...deltasMs].sort((x, y) => x - y);
+  const mid = Math.floor(sorted.length / 2);
+  const medianDeltaMs =
+    sorted.length === 0
+      ? 0
+      : sorted.length % 2
+        ? sorted[mid]
+        : Math.round((sorted[mid - 1] + sorted[mid]) / 2);
+  return {
+    deltasMs,
+    medianDeltaMs,
+    clumpedMoves: clumped.moves.length,
+    declumpedMoves: declumped.moves.length,
+  };
+}

@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import type { SessionLog, SessionEvent } from './recorder';
-import { replaySession } from './replay';
+import { replaySession, declumpLog, compareClumpLag } from './replay';
 
 /**
  * Replay-harness fixtures. These are SYNTHETIC reconstructions of the
@@ -77,6 +77,26 @@ describe('replay harness', () => {
     expect(r.path).toEqual([0, 1, 2]);
   });
 
+  it('de-clump mode: clumped delivery fires advances later than de-clumped', () => {
+    // two phrases' words withheld by Safari and released in one burst
+    const body = 'Alpha bravo charlie. Delta echo foxtrot. Golf hotel india.';
+    const events: SessionEvent[] = [
+      { t: 1000, kind: 'token', word: 'alpha', final: false },
+      // …then Safari goes quiet and dumps everything at t≈9000
+      ...['bravo', 'charlie', 'delta', 'echo', 'foxtrot'].map((word, i) => ({
+        t: 9000 + i * 8, kind: 'token' as const, word, final: false,
+      })),
+    ];
+    const log = session({ title: 'clumplag', lang: 'en-US', body }, events);
+    const de = declumpLog(log);
+    const deToks = de.events.filter((e) => e.kind === 'token');
+    // burst got spread across the silent interval instead of stacking at 9s
+    expect(deToks[1].t).toBeLessThan(8000);
+    const report = compareClumpLag(log);
+    expect(report.clumpedMoves).toBe(report.declumpedMoves);
+    expect(report.medianDeltaMs).toBeGreaterThan(1000); // Safari's share of the lag
+  });
+
   it('regression: ad-lib still holds under the new constants', () => {
     t = 0;
     const log = session(
@@ -87,4 +107,23 @@ describe('replay harness', () => {
     expect(r.moves.length).toBe(0);
     expect(r.finalIndex).toBe(0);
   });
+});
+
+/* Real rig-session fixtures: drop "Copy log" JSON into ./fixtures and
+   every file is replayed against the regression contract. */
+const realFixtures = Object.entries(
+  import.meta.glob('./fixtures/*.json', { eager: true }),
+) as Array<[string, { default: SessionLog }]>;
+
+describe.skipIf(realFixtures.length === 0)('real rig fixtures', () => {
+  it.each(realFixtures.map(([p, m]) => [p.replace(/^.*\//, ''), m.default] as const))(
+    '%s: no zero-evidence moves, replays to finished',
+    (_name, log) => {
+      const r = replaySession(log);
+      for (const move of r.moves) {
+        expect(move.evidence).toBeGreaterThanOrEqual(1);
+      }
+      expect(r.finished).toBe(true);
+    },
+  );
 });

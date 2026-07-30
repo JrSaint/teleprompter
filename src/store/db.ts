@@ -65,18 +65,19 @@ export async function loadSessionLogs(): Promise<unknown[]> {
  * touched; re-running is a no-op thanks to the flag).
  */
 export async function seedRigScripts(seeds: Script[]): Promise<void> {
-  const FLAG = 'seeded_rigtest_v1';
+  // v2: upserts by id so wording fixes reach devices seeded with v1
+  // (the two rig-test scripts are fixtures; local edits to them are
+  // intentionally replaced).
+  const FLAG = 'seeded_rigtest_v2';
   if (await db.getItem(FLAG)) return;
   const scripts = await loadScripts();
-  const have = new Set(scripts.map((s) => s.id));
-  let added = false;
   for (const seed of seeds) {
-    if (!have.has(seed.id)) {
-      scripts.push({ ...seed, updated: Date.now() });
-      added = true;
-    }
+    const at = scripts.findIndex((s) => s.id === seed.id);
+    const fresh = { ...seed, updated: Date.now() };
+    if (at >= 0) scripts[at] = fresh;
+    else scripts.push(fresh);
   }
-  if (added) await saveScripts(scripts);
+  await saveScripts(scripts);
   await db.setItem(FLAG, 1);
 }
 
