@@ -1,5 +1,6 @@
 import type { SessionLog } from './recorder';
 import { segmentScript } from './segmenter';
+import { parseAliases } from './aliases';
 import { PhraseMatcher, type MatcherConfig, type MatchEvent } from './matcher';
 
 /**
@@ -26,7 +27,11 @@ export function replaySession(
   cfg: Partial<MatcherConfig> = {},
 ): ReplayResult {
   const phrases = segmentScript(log.script.body, log.script.lang);
-  const m = new PhraseMatcher(phrases, cfg);
+  // the script's own aliases apply unless the caller overrides them
+  const m = new PhraseMatcher(phrases, {
+    aliases: parseAliases(log.script.aliases),
+    ...cfg,
+  });
   const moves: ReplayResult['moves'] = [];
   const path: number[] = [0];
 

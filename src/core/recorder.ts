@@ -32,7 +32,7 @@ export interface SessionLog {
   version: 1;
   id: string;
   startedAtIso: string;
-  script: { title: string; lang: Lang; body: string };
+  script: { title: string; lang: Lang; body: string; aliases?: string };
   events: SessionEvent[];
 }
 
@@ -40,7 +40,7 @@ export class FlightRecorder {
   private log: SessionLog | null = null;
   private t0 = 0;
 
-  start(script: { title: string; lang: Lang; body: string }): void {
+  start(script: { title: string; lang: Lang; body: string; aliases?: string }): void {
     this.t0 = performance.now();
     this.log = {
       version: 1,

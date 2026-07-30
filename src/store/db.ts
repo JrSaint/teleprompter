@@ -7,6 +7,8 @@ export interface Script {
   body: string;
   lang: Lang;
   updated: number;
+  /** Pronunciation aliases, one per line: "target: variant, variant" */
+  aliases?: string;
 }
 
 export interface Settings {
@@ -16,6 +18,11 @@ export interface Settings {
   sizeMult: number;     // 1.0–2.0 user multiplier on computed size
   diagOverlay: boolean; // diagnostics overlay on the prompter
   voiceStart: boolean;  // armed mode auto-starts on first phrase heard
+  /** Lead: swap when all but the final content word is in (default).
+      Confirm: swap only on phrase completion. */
+  swapTiming: 'lead' | 'confirm';
+  /** Next-phrase preview opacity (eye-voice span legibility). */
+  previewOpacity: number;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -25,6 +32,8 @@ export const DEFAULT_SETTINGS: Settings = {
   sizeMult: 1.4,
   diagOverlay: false,
   voiceStart: true,
+  swapTiming: 'lead',
+  previewOpacity: 0.6,
 };
 
 const db = localforage.createInstance({ name: 'voice-prompter' });

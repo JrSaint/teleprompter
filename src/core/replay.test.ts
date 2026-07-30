@@ -146,6 +146,47 @@ describe('fixture ptbr-rig-1 (real tape)', () => {
   });
 });
 
+/* B.0 lead-mode regression: both PT fixtures replayed with lead swap
+   timing — no chains (one move per trigger, strictly forward), same
+   far-skip, still finishes, all moves evidenced. */
+import ptbrRig2 from './fixtures/rigtest-pt-2026-07-30b.json';
+
+describe.each([
+  ['rigtest-pt-2026-07-30', ptbrRig1 as unknown as SessionLog],
+  ['rigtest-pt-2026-07-30b', ptbrRig2 as unknown as SessionLog],
+])('lead-mode replay: %s', (_name, log) => {
+  const lead = replaySession(log, { leadMode: true });
+
+  it('finishes with every move evidenced, never backward', () => {
+    expect(lead.finished).toBe(true);
+    for (const m of lead.moves) expect(m.evidence).toBeGreaterThanOrEqual(1);
+    for (let i = 1; i < lead.path.length; i++) {
+      expect(lead.path[i]).toBeGreaterThanOrEqual(lead.path[i - 1]);
+    }
+  });
+
+  it('never cascades more than one phrase per trigger token', () => {
+    const byTime = new Map<number, number>();
+    for (const m of lead.moves.filter((x) => x.type === 'advance')) {
+      byTime.set(m.t, (byTime.get(m.t) ?? 0) + 1);
+    }
+    for (const n of byTime.values()) expect(n).toBeLessThanOrEqual(1);
+  });
+
+  it('keeps the red-line far-skip', () => {
+    expect(lead.moves.some((m) => m.rule === 'far-skip')).toBe(true);
+  });
+});
+
+it('lead-mode replay: zero moves inside the acceptance-tape ad-lib window', () => {
+  // fixture-b improv ran t≈61233–68906; lead must add no moves there
+  // (the t=68906 boundary advance is the reader literally speaking the
+  // phrase words — rule-correct in both modes)
+  const lead = replaySession(ptbrRig2 as unknown as SessionLog, { leadMode: true });
+  const inWindow = lead.moves.filter((m) => m.t >= 61233 && m.t < 68906);
+  expect(inWindow).toEqual([]);
+});
+
 /* Real rig-session fixtures: drop "Copy log" JSON into ./fixtures and
    every file is replayed against the regression contract. */
 const realFixtures = Object.entries(

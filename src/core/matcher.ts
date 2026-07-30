@@ -13,6 +13,14 @@ export interface MatcherConfig {
   rescuePct: number;        // partial ratio that advances with next-phrase evidence
   skipCurrentBelowPct: number; // current must be below this to far-jump
   finalWordMinPct: number;  // a FUZZY final-word hit needs this much support
+  /** Lead swap timing: the display swaps once every content word
+      EXCEPT the final one is consumed (≥2-content phrases; 1-content
+      phrases keep confirm behavior). Display-timing repoint only — all
+      evidence rules, consume-once, and never-backward are unchanged. */
+  leadMode: boolean;
+  /** Pronunciation aliases: recognized variant → script target token
+      (normalized), folded before consumption. */
+  aliases?: Map<string, string>;
 }
 
 const DEFAULTS: MatcherConfig = {
@@ -21,10 +29,12 @@ const DEFAULTS: MatcherConfig = {
   rescuePct: 0.4,
   skipCurrentBelowPct: 0.4,
   finalWordMinPct: 0.5,
+  leadMode: false,
 };
 
 /** Which rule moved the display — recorded per decision for tuning. */
 export type MatchRule =
+  | 'lead'             // lead mode: all content words except the final consumed
   | 'final-exact'      // exact hit on the final content word
   | 'final-fuzzy'      // fuzzy final-word hit with ≥finalWordMinPct support
   | 'content-70'       // ≥advancePct of content words matched
@@ -127,6 +137,20 @@ export class PhraseMatcher {
     return ph.tokens[ph.contentIdx[ph.contentIdx.length - 1]];
   }
 
+  /** Lead-mode trigger: every content word EXCEPT the final one is
+      matched EXACTLY (requires ≥2 content words). Exact-only keeps the
+      early swap honest — fuzzy ad-lib noise ("muitas"≈"muito") must
+      not fire it; alias-folded hits count as exact. */
+  private nonFinalContentComplete(p: number): boolean {
+    const ph = this.phrases[p];
+    const ex = this.exact.get(p);
+    if (!ph || !ex || ph.contentIdx.length < 2) return false;
+    for (let i = 0; i < ph.contentIdx.length - 1; i++) {
+      if (!ex.has(ph.contentIdx[i])) return false;
+    }
+    return true;
+  }
+
   /** Try to mark one token of phrase p as matched by word w. Returns
       the matched token index or -1. Exact matches take priority over
       fuzzy ones so a precisely spoken final word is never consumed by
@@ -210,8 +234,10 @@ export class PhraseMatcher {
     const events: MatchEvent[] = [];
     let matchedAny = false;
     for (const raw of words) {
-      const w = normalizeWord(raw);
+      let w = normalizeWord(raw);
       if (!w || this.finished) continue;
+      // pronunciation aliases: fold recognized variant → script target
+      w = this.cfg.aliases?.get(w) ?? w;
 
       // absorb the tail word of a phrase completed via all-but-one
       if (this.leftover !== null) {
@@ -258,28 +284,36 @@ export class PhraseMatcher {
         const hits = this.contentMatchedCount(this.current);
         const contentTotal = this.phrases[this.current]?.contentIdx.length ?? 0;
         if (this.touchedCurrent) {
-          const final = this.finalContentMatched(this.current);
-          // A final content word of ≤3 letters (normalized) is too easy
-          // to hit by accident ("é", "joy") — even an exact hit needs
-          // half the phrase's content behind it.
-          const shortFinal = this.finalContentToken(this.current).length <= 3;
-          if (
-            final === 'exact' &&
-            (!shortFinal || pct >= this.cfg.finalWordMinPct)
-          ) rule = 'final-exact';
-          else if (final === 'fuzzy' && pct >= this.cfg.finalWordMinPct) rule = 'final-fuzzy';
-          else if (pct >= this.cfg.advancePct) rule = 'content-70';
-          // Integer-aware completion: with ≥3 content words, all but
-          // one matched completes the phrase — one untranscribable
-          // loanword must never hold the display hostage.
-          else if (contentTotal >= 3 && hits >= contentTotal - 1) rule = 'all-but-one';
-          // Boundary-crossing rescue: the phrase is half-said and the
-          // speaker has audibly started the NEXT phrase — a stalled
-          // half-match must not pin the display.
-          else if (
-            pct >= this.cfg.rescuePct &&
-            this.unambiguousEvidence(this.current + 1) >= 1
-          ) rule = 'boundary-rescue';
+          // Lead swap timing: everything but the final word is in — the
+          // late-arriving final word is absorbed by the completed phrase
+          // via the leftover machinery below.
+          if (this.cfg.leadMode && this.nonFinalContentComplete(this.current)) {
+            rule = 'lead';
+          }
+          if (rule === null) {
+            const final = this.finalContentMatched(this.current);
+            // A final content word of ≤3 letters (normalized) is too
+            // easy to hit by accident ("é", "joy") — even an exact hit
+            // needs half the phrase's content behind it.
+            const shortFinal = this.finalContentToken(this.current).length <= 3;
+            if (
+              final === 'exact' &&
+              (!shortFinal || pct >= this.cfg.finalWordMinPct)
+            ) rule = 'final-exact';
+            else if (final === 'fuzzy' && pct >= this.cfg.finalWordMinPct) rule = 'final-fuzzy';
+            else if (pct >= this.cfg.advancePct) rule = 'content-70';
+            // Integer-aware completion: with ≥3 content words, all but
+            // one matched completes the phrase — one untranscribable
+            // loanword must never hold the display hostage.
+            else if (contentTotal >= 3 && hits >= contentTotal - 1) rule = 'all-but-one';
+            // Boundary-crossing rescue: the phrase is half-said and the
+            // speaker has audibly started the NEXT phrase — a stalled
+            // half-match must not pin the display.
+            else if (
+              pct >= this.cfg.rescuePct &&
+              this.unambiguousEvidence(this.current + 1) >= 1
+            ) rule = 'boundary-rescue';
+          }
         }
         // Post-restart grace: the current phrase's words may have been
         // eaten by the dead session, so next-phrase evidence alone is
@@ -295,7 +329,8 @@ export class PhraseMatcher {
             this.unambiguousEvidence(this.current + 1), events,
           );
         } else if (rule !== null) {
-          if (rule === 'all-but-one') {
+          if (rule === 'all-but-one' || rule === 'lead') {
+            // absorb the phrase's remaining word(s) when they arrive late
             const ph = this.phrases[this.current];
             const set = this.matched.get(this.current);
             this.leftover = ph.tokens.filter((_, t) => !set?.has(t));

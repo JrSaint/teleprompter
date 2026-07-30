@@ -62,6 +62,7 @@ export function createPrompterView(
   const fontPx = fontPxForDistance(settings.distanceFt, settings.sizeMult);
   curEl.style.fontSize = fontPx + 'px';
   nextEl.style.fontSize = Math.round(fontPx * 0.55) + 'px';
+  nextEl.style.opacity = String(settings.previewOpacity);
 
   let flowState: FlowState = 'idle';
   let phraseIndex = 0;
@@ -112,7 +113,7 @@ export function createPrompterView(
       paintDiag(diag.snapshot());
     },
     onMic: (s, detail) => paintStatus(s, detail),
-  });
+  }, { leadMode: settings.swapTiming !== 'confirm' });
 
   const unsubDiag = diag.subscribe(paintDiag);
   diagEl.hidden = !settings.diagOverlay;

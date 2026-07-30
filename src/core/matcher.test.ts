@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { segmentScript } from './segmenter';
 import { PhraseMatcher } from './matcher';
+import { parseAliases } from './aliases';
 
 const build = (body: string, lang: 'en-US' | 'pt-BR' = 'en-US') => {
   const phrases = segmentScript(body, lang);
@@ -253,6 +254,64 @@ describe('matcher', () => {
     ];
     expect(all.length).toBeGreaterThanOrEqual(2);
     for (const e of all) expect(e.evidence).toBeGreaterThanOrEqual(1);
+  });
+
+  it('lead mode: swaps once all non-final content words are in, absorbs the late final', () => {
+    const phrases = segmentScript('The river was rising fast. Nothing else moved there.', 'en-US');
+    const m = new PhraseMatcher(phrases, { leadMode: true });
+    // content: river, rising, fast — the two non-final words complete it
+    const r = m.feed(['the', 'river', 'was', 'rising']);
+    expect(r.events.some((e) => e.rule === 'lead')).toBe(true);
+    expect(m.current).toBe(1);
+    // the late-arriving final word is absorbed, not fed to the new phrase
+    const r2 = m.feed(['fast']);
+    expect(r2.events.length).toBe(0);
+    expect(m.current).toBe(1);
+  });
+
+  it('lead mode: 1-content phrases keep confirm behavior', () => {
+    const phrases = segmentScript('a próxima. Outra frase inteira aqui agora.', 'pt-BR');
+    const m = new PhraseMatcher(phrases, { leadMode: true });
+    expect(phrases[0].contentIdx.length).toBe(1);
+    m.feed(['a']); // stopword touch only — must NOT swap
+    expect(m.current).toBe(0);
+    m.feed(['proxima']); // the single content word confirms
+    expect(m.current).toBe(1);
+  });
+
+  it('lead mode: a swap cannot cascade without new evidence', () => {
+    const phrases = segmentScript('Holy holy holy. / Holy holy holy. / Amen forever and ever.', 'en-US');
+    const m = new PhraseMatcher(phrases, { leadMode: true });
+    m.feed(['holy', 'holy', 'holy']);
+    expect(m.current).toBe(1); // exactly one phrase per spoken line
+  });
+
+  it('aliases: "O Peter esperou" advances the prompter phrase without all-but-one', () => {
+    const body = 'Muito bem. O prompter esperou por você e te encontrou de novo.';
+    const phrases = segmentScript(body, 'pt-BR');
+    const aliases = parseAliases('prompter: peter, pro, pt');
+    const m = new PhraseMatcher(phrases, { aliases });
+    m.feed(['muito', 'bem']);
+    const promptIdx = phrases.findIndex((p) => p.tokens.includes('prompter'));
+    expect(m.current).toBe(promptIdx);
+    // the acceptance tape's exact tokens
+    const r = m.feed(['o', 'peter', 'esperou']);
+    const move = r.events.find((e) => e.to === promptIdx + 1);
+    expect(move).toBeDefined();
+    expect(move!.rule).not.toBe('all-but-one');
+    expect(move!.evidence).toBe(2); // prompter (via alias) + esperou
+  });
+
+  it('aliases: multi-word brand rides through via per-word aliases', () => {
+    const body = 'Use the Kids Chore Chart daily. Another sentence entirely follows here.';
+    const phrases = segmentScript(body, 'en-US');
+    // variants far outside fuzzy range, like the real "Peter"→"prompter"
+    const aliases = parseAliases('kids: quites\nchore: xorro\nchart: xarope');
+    const noAlias = new PhraseMatcher(phrases);
+    noAlias.feed(['use', 'the', 'quites', 'xorro', 'xarope', 'daily']);
+    const withAlias = new PhraseMatcher(phrases, { aliases });
+    withAlias.feed(['use', 'the', 'quites', 'xorro', 'xarope', 'daily']);
+    expect(withAlias.current).toBeGreaterThan(noAlias.current);
   });
 
   it('supports manual navigation including backward', () => {

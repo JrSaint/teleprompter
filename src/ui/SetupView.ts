@@ -159,7 +159,14 @@ export function createSetupView(
       <label class="su-row su-toggle"><span>Mirror vertically</span>
         <input type="checkbox" id="set-mv" ${settings.mirrorV ? 'checked' : ''}></label>
       <label class="su-row su-toggle"><span>Diagnostics overlay</span>
-        <input type="checkbox" id="set-diag" ${settings.diagOverlay ? 'checked' : ''}></label>`;
+        <input type="checkbox" id="set-diag" ${settings.diagOverlay ? 'checked' : ''}></label>
+      <label class="su-row"><span>Swap timing</span>
+        <select id="set-swap">
+          <option value="lead" ${settings.swapTiming === 'lead' ? 'selected' : ''}>Lead (early swap)</option>
+          <option value="confirm" ${settings.swapTiming === 'confirm' ? 'selected' : ''}>Confirm (on completion)</option>
+        </select></label>
+      <label class="su-row"><span>Preview brightness <b>${Math.round(settings.previewOpacity * 100)}%</b></span>
+        <input type="range" id="set-preview" min="30" max="80" step="5" value="${Math.round(settings.previewOpacity * 100)}"></label>`;
     (card.querySelector('#set-dist') as HTMLInputElement).oninput = (e) => {
       settings.distanceFt = parseFloat((e.target as HTMLInputElement).value);
       void persistSettings();
@@ -182,6 +189,15 @@ export function createSetupView(
       settings.diagOverlay = (e.target as HTMLInputElement).checked;
       void persistSettings();
     };
+    (card.querySelector('#set-swap') as HTMLSelectElement).onchange = (e) => {
+      settings.swapTiming = (e.target as HTMLSelectElement).value as 'lead' | 'confirm';
+      void persistSettings();
+    };
+    (card.querySelector('#set-preview') as HTMLInputElement).oninput = (e) => {
+      settings.previewOpacity = parseInt((e.target as HTMLInputElement).value, 10) / 100;
+      void persistSettings();
+      renderSettingsCard();
+    };
   }
 
   function renderEditor(s: Script): void {
@@ -203,15 +219,19 @@ export function createSetupView(
         <button id="ed-clear">Clear color</button>
         <span id="ed-count" class="ed-hint"></span>
       </div>
+      <textarea id="ed-aliases" rows="2" spellcheck="false"
+        placeholder="Aliases (what the recognizer says → script word), one per line — e.g.  prompter: peter, pro, pt"></textarea>
       <textarea id="ed-body" placeholder="Paste or type the script… Use / to force a phrase break." spellcheck="false"></textarea>`;
 
     const title = el.querySelector('#ed-title') as HTMLInputElement;
     const langSel = el.querySelector('#ed-lang') as HTMLSelectElement;
     const body = el.querySelector('#ed-body') as HTMLTextAreaElement;
+    const aliases = el.querySelector('#ed-aliases') as HTMLTextAreaElement;
     const count = el.querySelector('#ed-count') as HTMLElement;
     title.value = s.title;
     langSel.value = s.lang;
     body.value = s.body;
+    aliases.value = s.aliases ?? '';
 
     const INK: Record<string, string> = {
       yellow: '#ffd60a', orange: '#ff9f0a', red: '#ff453a',
@@ -247,6 +267,7 @@ export function createSetupView(
       s.title = title.value.trim();
       s.lang = langSel.value as Lang;
       s.body = body.value;
+      s.aliases = aliases.value;
       s.updated = Date.now();
       const phrases = segmentScript(s.body, s.lang);
       count.textContent = `${phrases.length} phrases`;
@@ -255,6 +276,7 @@ export function createSetupView(
     title.addEventListener('input', save);
     langSel.addEventListener('change', save);
     body.addEventListener('input', save);
+    aliases.addEventListener('input', save);
     save();
 
     (el.querySelector('#ed-back') as HTMLButtonElement).onclick = () => {

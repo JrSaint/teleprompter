@@ -5,6 +5,7 @@ import type { SpeechSource, SpeechStatus } from '../core/speech/SpeechSource';
 import { diag } from '../core/diag';
 import { FlightRecorder } from '../core/recorder';
 import { saveSessionLog } from '../store/db';
+import { parseAliases } from '../core/aliases';
 import type { Lang } from '../core/text';
 
 /** Silence/ad-lib window before "following" degrades to "holding". */
@@ -54,13 +55,17 @@ export class PrompterController {
   private stepTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(
-    script: { title: string; lang: Lang; body: string },
+    script: { title: string; lang: Lang; body: string; aliases?: string },
     phrases: Phrase[],
     speech: SpeechSource,
     ev: ControllerEvents,
+    opts: { leadMode?: boolean } = {},
   ) {
     this.phrases = phrases;
-    this.matcher = new PhraseMatcher(phrases);
+    this.matcher = new PhraseMatcher(phrases, {
+      leadMode: opts.leadMode ?? false,
+      aliases: parseAliases(script.aliases),
+    });
     this.speech = speech;
     this.locale = script.lang;
     this.ev = ev;
