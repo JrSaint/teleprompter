@@ -1,0 +1,81 @@
+/**
+ * On-device diagnostics. Console logging is unreachable on the iPad in
+ * the rig, so everything worth measuring lands here and the prompter's
+ * corner overlay renders it live.
+ */
+
+export interface DiagSnapshot {
+  restartCount: number;
+  restartGaps: number[];      // ms, most recent last
+  advanceLatencies: number[]; // ms from result-event receipt to painted swap
+  log: string[];              // recent human-readable events
+}
+
+type Listener = (s: DiagSnapshot) => void;
+
+const MAX_KEPT = 20;
+
+class Diagnostics {
+  private state: DiagSnapshot = {
+    restartCount: 0,
+    restartGaps: [],
+    advanceLatencies: [],
+    log: [],
+  };
+  private listeners = new Set<Listener>();
+
+  private push(): void {
+    for (const fn of this.listeners) fn(this.snapshot());
+  }
+
+  subscribe(fn: Listener): () => void {
+    this.listeners.add(fn);
+    fn(this.snapshot());
+    return () => this.listeners.delete(fn);
+  }
+
+  snapshot(): DiagSnapshot {
+    return {
+      restartCount: this.state.restartCount,
+      restartGaps: [...this.state.restartGaps],
+      advanceLatencies: [...this.state.advanceLatencies],
+      log: [...this.state.log],
+    };
+  }
+
+  event(message: string): void {
+    const t = (performance.now() / 1000).toFixed(1);
+    this.state.log.push(`[${t}s] ${message}`);
+    if (this.state.log.length > MAX_KEPT) this.state.log.shift();
+    // Also mirror to console for Mac-side development.
+    console.log(`[diag ${t}s] ${message}`);
+    this.push();
+  }
+
+  restartGap(ms: number): void {
+    this.state.restartCount++;
+    this.state.restartGaps.push(Math.round(ms));
+    if (this.state.restartGaps.length > MAX_KEPT) this.state.restartGaps.shift();
+    this.event(`speech session restart #${this.state.restartCount}, gap ${Math.round(ms)}ms`);
+  }
+
+  advanceLatency(ms: number): void {
+    this.state.advanceLatencies.push(Math.round(ms));
+    if (this.state.advanceLatencies.length > MAX_KEPT) this.state.advanceLatencies.shift();
+    this.push();
+  }
+
+  reset(): void {
+    this.state = { restartCount: 0, restartGaps: [], advanceLatencies: [], log: [] };
+    this.push();
+  }
+}
+
+export const diag = new Diagnostics();
+
+export function median(xs: number[]): number {
+  if (xs.length === 0) return 0;
+  const s = [...xs].sort((a, b) => a - b);
+  const mid = Math.floor(s.length / 2);
+  return s.length % 2 ? s[mid] : Math.round((s[mid - 1] + s[mid]) / 2);
+}
