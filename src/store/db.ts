@@ -47,6 +47,26 @@ export async function saveSettings(s: Settings): Promise<void> {
 }
 
 /**
+ * Seed the rig-test scripts once per device (existing scripts are never
+ * touched; re-running is a no-op thanks to the flag).
+ */
+export async function seedRigScripts(seeds: Script[]): Promise<void> {
+  const FLAG = 'seeded_rigtest_v1';
+  if (await db.getItem(FLAG)) return;
+  const scripts = await loadScripts();
+  const have = new Set(scripts.map((s) => s.id));
+  let added = false;
+  for (const seed of seeds) {
+    if (!have.has(seed.id)) {
+      scripts.push({ ...seed, updated: Date.now() });
+      added = true;
+    }
+  }
+  if (added) await saveScripts(scripts);
+  await db.setItem(FLAG, 1);
+}
+
+/**
  * One-time, non-destructive migration from the scroll-era app: copy
  * localStorage scripts/settings into IndexedDB, leaving the originals
  * untouched.
