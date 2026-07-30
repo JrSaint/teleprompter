@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import type { SessionLog, SessionEvent } from './recorder';
 import { replaySession, declumpLog, compareClumpLag } from './replay';
+import { segmentScript } from './segmenter';
 
 /**
  * Replay-harness fixtures. These are SYNTHETIC reconstructions of the
@@ -106,6 +107,42 @@ describe('replay harness', () => {
     const r = replaySession(log);
     expect(r.moves.length).toBe(0);
     expect(r.finalIndex).toBe(0);
+  });
+});
+
+/* First real pt-BR rig tape (2026-07-30, recorded on the A.1 build).
+   Tape "before": bogus advances at t=4543/4757 (é-conjunction
+   segmentation bug + stopword finals), 19.7s hostage on the "prompter"
+   phrase, duplicate re-emission cross-credits. Pins the A.2 behavior. */
+import ptbrRig1 from './fixtures/ptbr-rig-1.json';
+
+describe('fixture ptbr-rig-1 (real tape)', () => {
+  const log = ptbrRig1 as unknown as SessionLog;
+  const r = replaySession(log);
+
+  it('kills the early bogus advances (tape: t=4543 and t=4757)', () => {
+    // first legitimate advance is the number-folded "60" rescue at 8624
+    expect(r.moves[0].t).toBeGreaterThanOrEqual(8000);
+    expect(r.moves[0].evidence).toBeGreaterThanOrEqual(1);
+  });
+
+  it('advances past the "prompter" phrase on the first matchable word', () => {
+    const phrases = segmentScript(log.script.body, log.script.lang);
+    const promptIdx = phrases.findIndex((p) => p.tokens.includes('prompter'));
+    expect(promptIdx).toBeGreaterThan(0);
+    const out = r.moves.find((m) => m.to === promptIdx + 1);
+    // "espero" (fuzzy esperou) lands at t=87309 — no post-evidence stall
+    expect(out?.t).toBeLessThanOrEqual(87400);
+  });
+
+  it('still far-skips the red line and finishes', () => {
+    const skip = r.moves.find((m) => m.rule === 'far-skip');
+    expect(skip).toBeDefined();
+    expect(r.finished).toBe(true);
+  });
+
+  it('exercises the all-but-one rule on real Siri drops', () => {
+    expect(r.moves.filter((m) => m.rule === 'all-but-one').length).toBeGreaterThanOrEqual(1);
   });
 });
 
