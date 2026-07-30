@@ -46,6 +46,20 @@ export async function saveSettings(s: Settings): Promise<void> {
   await db.setItem('settings', s);
 }
 
+/* ---- Flight-recorder session logs (last 5 kept) ---- */
+const MAX_SESSIONS = 5;
+
+export async function saveSessionLog(log: unknown & { id: string }): Promise<void> {
+  const sessions =
+    (await db.getItem<Array<{ id: string }>>('sessions')) ?? [];
+  const rest = sessions.filter((s) => s.id !== log.id);
+  await db.setItem('sessions', [log, ...rest].slice(0, MAX_SESSIONS));
+}
+
+export async function loadSessionLogs(): Promise<unknown[]> {
+  return (await db.getItem<unknown[]>('sessions')) ?? [];
+}
+
 /**
  * Seed the rig-test scripts once per device (existing scripts are never
  * touched; re-running is a no-op thanks to the flag).

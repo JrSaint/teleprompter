@@ -34,7 +34,10 @@ export function createPrompterView(
       <div id="vp-done" hidden>— end of script —</div>
     </div>
     <div id="vp-status"></div>
-    <div id="vp-diag" hidden></div>
+    <div id="vp-diag" hidden>
+      <div id="vp-diag-body"></div>
+      <button id="vp-copylog" title="Copy session log to clipboard">⧉ Copy log</button>
+    </div>
     <div id="vp-bar">
       <button id="vp-exit" title="Exit (Esc)">✕</button>
       <button id="vp-prev" title="Previous phrase (←)">‹</button>
@@ -63,9 +66,12 @@ export function createPrompterView(
   let flowState: FlowState = 'idle';
   let phraseIndex = 0;
 
+  const diagBody = $('vp-diag-body');
+
   const paintStatus = (mic = controller.mic, detail = '') => {
     const pos = `${Math.min(phraseIndex + 1, phrases.length)}/${phrases.length}`;
-    statusEl.textContent = `${flowState}  ·  mic: ${mic}${detail ? ` (${detail})` : ''}  ·  ${pos}`;
+    const heal = controller.healed ? '~  ·  ' : '';
+    statusEl.textContent = `${heal}${flowState}  ·  mic: ${mic}${detail ? ` (${detail})` : ''}  ·  ${pos}`;
   };
 
   const paintDiag = (d: DiagSnapshot) => {
@@ -73,7 +79,7 @@ export function createPrompterView(
     const gaps = d.restartGaps.slice(-5).map((g) => `${g}`).join(', ') || '—';
     const lat = d.advanceLatencies;
     const last = lat.length ? lat[lat.length - 1] : null;
-    diagEl.innerHTML = '';
+    diagBody.innerHTML = '';
     const lines = [
       `restarts: ${d.restartCount}`,
       `gaps ms: ${gaps}`,
@@ -83,12 +89,12 @@ export function createPrompterView(
     for (const line of lines) {
       const div = document.createElement('div');
       div.textContent = line;
-      diagEl.appendChild(div);
+      diagBody.appendChild(div);
     }
   };
 
   const speech = new WebSpeechSource();
-  const controller = new PrompterController(phrases, speech, script.lang, {
+  const controller = new PrompterController(script, phrases, speech, {
     onPhrase: (cur, nxt, i) => {
       phraseIndex = i;
       const finished = cur === null;
@@ -154,6 +160,19 @@ export function createPrompterView(
   const toggleDiag = () => {
     diagEl.hidden = !diagEl.hidden;
     paintDiag(diag.snapshot());
+  };
+
+  $('vp-copylog').onclick = async () => {
+    const log = controller.recorder.current();
+    if (!log) return;
+    const btn = $('vp-copylog');
+    try {
+      await navigator.clipboard.writeText(JSON.stringify(log));
+      btn.textContent = '✓ Copied';
+    } catch {
+      btn.textContent = '✕ Copy failed';
+    }
+    setTimeout(() => (btn.textContent = '⧉ Copy log'), 1500);
   };
 
   $('vp-exit').onclick = onExit;

@@ -182,6 +182,16 @@ export function segmentScript(body: string, lang: Lang): Phrase[] {
   return chunk(tokenize(body, lang)).map((ws) => {
     const tokens: string[] = [];
     for (const w of ws) {
+      // "24/7", "07/30", "10:30" → one digit-group token per group, so
+      // spoken digits can match each part (number folding lives in the
+      // matcher's equality check).
+      const bare = w.text.replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, '');
+      if (/^\d+(?:[/:.,-]\d+)+$/.test(bare)) {
+        for (const group of bare.split(/[^\d]+/)) {
+          if (group) tokens.push(group);
+        }
+        continue;
+      }
       const t = normalizeWord(w.text);
       if (t) tokens.push(t);
     }

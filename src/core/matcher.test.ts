@@ -131,6 +131,78 @@ describe('matcher', () => {
     expect(m.current).toBe(1);
   });
 
+  it('boundary-rescue: half-matched phrase advances when the next phrase starts', () => {
+    // recognizer mangled half of phrase A including the final word;
+    // speaker moves on — the display must not stay pinned
+    const { m } = build('The morning fog settled early. We walked the narrow path.');
+    m.feed(['morning', 'fog']); // 2 of 4 content words, final word never comes
+    expect(m.current).toBe(0);
+    const r = m.feed(['walked']); // first content word of the NEXT phrase
+    expect(r.events.some((e) => e.rule === 'boundary-rescue')).toBe(true);
+    expect(m.current).toBe(1);
+  });
+
+  it('boundary-rescue does not fire below the rescue threshold', () => {
+    const { m } = build('The morning fog settled early. We walked the narrow path.');
+    m.feed(['morning']); // 1 of 4 = 25% < 40%
+    m.feed(['walked']);
+    expect(m.current).toBe(0);
+  });
+
+  it('far-skip gate raised to 40%: a third-matched phrase can still be rescued by a jump', () => {
+    const { m } = build('Alpha bravo charlie tonight. / Delta echo foxtrot gather. / Golf hotel india juliet.');
+    m.feed(['alpha']); // 1 of 4 content ≈ 25–33% — above old 30% gate on 3-content phrases
+    const r = m.feed(['golf', 'hotel', 'india', 'juliet']);
+    expect(r.events.some((e) => e.type === 'jump')).toBe(true);
+    expect(m.current).toBeGreaterThanOrEqual(2);
+  });
+
+  it('post-restart grace: next-phrase evidence alone advances', () => {
+    // the whole current phrase was eaten by a dead session
+    const { m } = build('The morning fog settled early. We walked the narrow path.');
+    const r = m.feed(['walked'], { grace: true });
+    expect(r.events.some((e) => e.rule === 'restart-grace')).toBe(true);
+    expect(m.current).toBe(1);
+    // without grace the same single word does nothing
+    const { m: m2 } = build('The morning fog settled early. We walked the narrow path.');
+    m2.feed(['walked']);
+    expect(m2.current).toBe(0);
+  });
+
+  it('folds numbers: digits and spelled forms match both ways (EN and PT)', () => {
+    const { m } = build('Doors open at seven sharp. Everything begins right then.');
+    const r = m.feed(['doors', 'open', 'at', '7', 'sharp']);
+    expect(r.events.some((e) => e.type === 'advance')).toBe(true);
+
+    const { m: pt } = build('O culto começa às sete horas. Todos chegam bem antes.', 'pt-BR');
+    const r2 = pt.feed(['o', 'culto', 'comeca', 'as', '7', 'horas']);
+    expect(r2.events.some((e) => e.type === 'advance')).toBe(true);
+
+    // spelled recognition against a digit script token
+    const { m: en2 } = build('The store closes at 9 tonight. Nobody stays after that.');
+    const r3 = en2.feed(['store', 'closes', 'at', 'nine', 'tonight']);
+    expect(r3.events.some((e) => e.type === 'advance')).toBe(true);
+  });
+
+  it('matches digit groups inside 24/7-style tokens', () => {
+    const { m, phrases } = build('We are open 24/7 here. Come by any time friend.');
+    expect(phrases[0].tokens).toContain('24');
+    expect(phrases[0].tokens).toContain('7');
+    const r = m.feed(['we', 'are', 'open', '24', '7', 'here']);
+    expect(r.events.some((e) => e.type === 'advance')).toBe(true);
+  });
+
+  it('forceAdvance steps one phrase and keeps lookahead credits', () => {
+    const { m } = build('One two three four. Five six seven eight. Nine ten eleven twelve.');
+    m.feed(['five', 'six']); // lookahead credits on phrase 1
+    const e = m.forceAdvance();
+    expect(e?.rule).toBe('self-heal');
+    expect(m.current).toBe(1);
+    // the earlier credits survive: two more words complete phrase 1
+    m.feed(['seven', 'eight']);
+    expect(m.current).toBe(2);
+  });
+
   it('supports manual navigation including backward', () => {
     const { m } = build('One two three four. Five six seven eight. Nine ten eleven twelve.');
     m.feed(['one', 'two', 'three', 'four']);
