@@ -37,16 +37,26 @@
     <input id="editor-title" placeholder="Untitled script" autocomplete="off">
     <button id="btn-editor-play" class="primary">▶ Prompt</button>
   </header>
+  <div id="editor-tools">
+    <span class="tools-hint">Color selected text:</span>
+    <button class="edit-color" data-c="yellow" style="background:#ffd60a" title="Yellow"></button>
+    <button class="edit-color" data-c="orange" style="background:#ff9f0a" title="Orange"></button>
+    <button class="edit-color" data-c="red" style="background:#ff453a" title="Red"></button>
+    <button class="edit-color" data-c="green" style="background:#30d158" title="Green"></button>
+    <button class="edit-color" data-c="blue" style="background:#64d2ff" title="Blue"></button>
+    <button class="edit-color" data-c="purple" style="background:#bf5af2" title="Purple"></button>
+    <button id="btn-clear-color" title="Remove color from selection">Clear color</button>
+  </div>
   <textarea id="editor-body" placeholder="Paste or type your script here…" spellcheck="false"></textarea>
 </div>
 
 <!-- ============ PROMPTER ============ -->
 <div id="view-prompter" class="view" hidden>
   <div id="flip-wrap">
+    <div id="guide"></div>
     <div id="stage">
       <div id="content"></div>
     </div>
-    <div id="guide"><span class="guide-arrow">▶</span><span class="guide-line"></span></div>
   </div>
 
   <div id="progress"><div id="progress-fill"></div></div>
@@ -66,7 +76,7 @@
     <button id="btn-forward" class="bar-btn" title="Jump forward">↓</button>
     <div class="speed-group">
       <button id="btn-slower" class="bar-btn" title="Slower">−</button>
-      <div id="speed-value" title="Scroll speed">70</div>
+      <div id="speed-value" title="Reading pace">130<small> wpm</small></div>
       <button id="btn-faster" class="bar-btn" title="Faster">＋</button>
     </div>
   </div>
@@ -108,16 +118,15 @@
       <label class="row toggle"><span>ALL CAPS</span><input type="checkbox" id="set-caps"></label>
       <label class="row toggle"><span>Mirror horizontally <small>(beam-splitter glass)</small></span><input type="checkbox" id="set-mirror-h"></label>
       <label class="row toggle"><span>Mirror vertically</span><input type="checkbox" id="set-mirror-v"></label>
-      <label class="row toggle"><span>Reading guide</span><input type="checkbox" id="set-guide"></label>
-      <label class="row toggle"><span>Highlight current line</span><input type="checkbox" id="set-highlight"></label>
+      <label class="row toggle"><span>Reading line highlight</span><input type="checkbox" id="set-guide"></label>
       <label class="row toggle"><span>3-second countdown</span><input type="checkbox" id="set-countdown"></label>
     </section>
 
     <section>
-      <h3>Speed</h3>
+      <h3>Pace</h3>
       <label class="row">
-        <span>Scroll speed <b id="val-speed"></b></span>
-        <input type="range" id="set-speed" min="10" max="300" step="5">
+        <span>Reading pace <small>(words per minute)</small> <b id="val-speed"></b></span>
+        <input type="range" id="set-speed" min="60" max="240" step="5">
       </label>
     </section>
 

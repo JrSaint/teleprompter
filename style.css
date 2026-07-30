@@ -70,6 +70,17 @@ button { font: inherit; color: inherit; background: none; border: none; cursor: 
   flex: 1; background: none; border: none; outline: none;
   color: #f2f2f7; font-size: 20px; font-weight: 600; min-width: 0;
 }
+#editor-tools {
+  display: flex; align-items: center; gap: 10px;
+  padding: 10px 20px; border-bottom: 1px solid #1c1c1e;
+}
+.tools-hint { color: #8e8e93; font-size: 13px; }
+.edit-color { width: 26px; height: 26px; border-radius: 50%; flex-shrink: 0; }
+.edit-color:active { transform: scale(1.15); }
+#btn-clear-color {
+  color: #8e8e93; font-size: 13px; background: #1c1c1e;
+  border-radius: 8px; padding: 6px 10px; margin-left: auto;
+}
 #editor-body {
   flex: 1; background: #000; color: #f2f2f7; border: none; outline: none; resize: none;
   padding: 24px; font-size: 19px; line-height: 1.6;
@@ -91,20 +102,13 @@ button { font: inherit; color: inherit; background: none; border: none; cursor: 
   font-weight: 600; letter-spacing: 0.01em;
 }
 #content.caps { text-transform: uppercase; }
-#line-hl {
-  position: absolute; left: 0; right: 0; z-index: -1;
+/* Fixed reading-line highlight band: text scrolls through it */
+#guide {
+  position: absolute; left: 0; right: 0;
   background: rgba(255, 159, 10, 0.30);
   border-radius: 10px;
-  transition: top 120ms ease-out;
-  display: none;
+  pointer-events: none;
 }
-
-#guide {
-  position: absolute; left: 0; right: 0; top: 35vh;
-  pointer-events: none; display: flex; align-items: center;
-}
-.guide-arrow { color: #ff9f0a; font-size: 20px; padding-left: 6px; line-height: 0; }
-.guide-line { flex: 1; height: 1px; background: rgba(255, 159, 10, 0.25); margin-left: 6px; }
 
 #progress {
   position: absolute; top: 0; left: 0; right: 0; height: 3px;
@@ -150,9 +154,10 @@ button { font: inherit; color: inherit; background: none; border: none; cursor: 
 }
 .speed-group .bar-btn { background: none; min-width: 40px; height: 38px; }
 #speed-value {
-  min-width: 44px; text-align: center; font-size: 16px; font-weight: 600;
+  min-width: 72px; text-align: center; font-size: 16px; font-weight: 600;
   font-variant-numeric: tabular-nums;
 }
+#speed-value small { font-size: 11px; font-weight: 500; color: #8e8e93; }
 
 #countdown {
   position: absolute; inset: 0; z-index: 20;

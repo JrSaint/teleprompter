@@ -18,8 +18,7 @@ const DEFAULT_SETTINGS = {
   mirrorV: false,
   guide: true,
   countdown: true,
-  highlight: true,
-  speed: 70,           // px per second
+  wpm: 130,            // reading pace, words per minute
 };
 
 // Default map covers common BT page-turner pedals, clickers and keyboards.
@@ -65,6 +64,15 @@ function saveKeymap() { localStorage.setItem(LS_KEYMAP, JSON.stringify(keymap));
 
 let scripts = loadScripts();
 let settings = loadJSON(LS_SETTINGS, DEFAULT_SETTINGS);
+// One-time migration from older stored settings: the arrow guide and the
+// moving line highlight merged into the fixed highlight band ('guide'),
+// and speed (px/s) was replaced by pace (wpm).
+if ('highlight' in settings || 'speed' in settings) {
+  settings.guide = settings.guide || !!settings.highlight;
+  delete settings.highlight;
+  delete settings.speed;
+  saveSettings();
+}
 let keymap = (() => {
   try {
     const raw = localStorage.getItem(LS_KEYMAP);
@@ -80,7 +88,7 @@ if (scripts.length === 0 && !localStorage.getItem('tp_seeded')) {
     body:
 `Welcome to your teleprompter.
 
-Tap anywhere on the screen to start and stop scrolling. The orange arrow on the left marks your reading line.
+Tap anywhere on the screen to start and stop scrolling. Read the line inside the {orange:orange band} — the text scrolls through it at your pace, and your eyes never have to move.
 
 To use a Bluetooth remote, pedal, or clicker, pair it with the iPad in Settings, then Bluetooth. It will show up as a keyboard.
 
@@ -88,7 +96,7 @@ Out of the box: space or enter plays and pauses. Down arrow or page down speeds 
 
 If your remote sends different keys, open Settings, press a button on the remote, and map it to any action.
 
-Notice how the current line is highlighted as the text scrolls, so you never lose your place. You can turn this off in Settings.
+You can also give {yellow:individual} {red:words} {green:their} {blue:own} {purple:colors}: in the editor, select some text and tap a color dot.
 
 In Settings you can also change font size, speed, margins, and colors, and turn on mirror mode to flip the whole image for beam-splitter teleprompter glass.
 
@@ -122,7 +130,8 @@ function showView(name) {
 
 /* ---------------- Library ---------------- */
 function fmtWords(body) {
-  const w = body.trim() ? body.trim().split(/\s+/).length : 0;
+  const t = stripMarkup(body);
+  const w = t.trim() ? t.trim().split(/\s+/).length : 0;
   const mins = Math.max(1, Math.round(w / 150));
   return `${w} words · ~${mins} min read`;
 }
@@ -220,6 +229,34 @@ $('btn-editor-back').onclick = () => {
 };
 $('btn-editor-play').onclick = () => { saveEditor(); openPrompter(editingId); };
 
+/* Editor color tools: wrap the textarea selection in {color:…} markup */
+function wrapSelection(color) {
+  const ta = els.editorBody;
+  const s = ta.selectionStart, e = ta.selectionEnd;
+  const sel = ta.value.slice(s, e);
+  const ins = `{${color}:${sel}}`;
+  ta.value = ta.value.slice(0, s) + ins + ta.value.slice(e);
+  const caret = sel ? s + ins.length : s + color.length + 2;
+  ta.setSelectionRange(caret, caret);
+  ta.focus();
+  saveEditor();
+}
+document.querySelectorAll('.edit-color').forEach(btn => {
+  btn.addEventListener('pointerdown', (e) => e.preventDefault()); // keep textarea selection
+  btn.addEventListener('click', () => wrapSelection(btn.dataset.c));
+});
+$('btn-clear-color').addEventListener('pointerdown', (e) => e.preventDefault());
+$('btn-clear-color').onclick = () => {
+  const ta = els.editorBody;
+  const s = ta.selectionStart, e = ta.selectionEnd;
+  if (s === e) return;
+  const cleaned = stripMarkup(ta.value.slice(s, e));
+  ta.value = ta.value.slice(0, s) + cleaned + ta.value.slice(e);
+  ta.setSelectionRange(s, s + cleaned.length);
+  ta.focus();
+  saveEditor();
+};
+
 /* ---------------- Prompter engine ---------------- */
 const prompter = {
   scriptId: null,
@@ -233,82 +270,51 @@ const prompter = {
 
 function guideY() { return window.innerHeight * 0.35; }
 
-/* --- Line highlighting --------------------------------------------
-   The script body is split into word <span>s so visual lines can be
-   measured after layout. Each line gets a trigger: the scroll position
-   at which it crosses the reading guide. A highlight bar sits behind
-   the current line and steps down line by line, in sync with the
-   scroll. */
-let wordSpans = [];
-let lineData = [];   // { trigger, top, height } per visual line
-let hlLine = -1;
-let lineHlBar = null;
+/* Pace is set in words/min; the scroll rate in px/s is derived from the
+   current script's layout (px of text per word), so font size and margin
+   changes never alter the spoken pace. */
+let pxPerWord = 40;
+function scrollRate() { return (settings.wpm / 60) * pxPerWord; }
+
+/* --- Script content + inline word colors ---------------------------
+   Scripts may color words with {color:some words} markup, e.g.
+   {yellow:pause here} or {#ff0000:name}. The editor's color dots wrap
+   the selection automatically. Unknown color names render as plain
+   text (never as visible braces). */
+const INK = {
+  red: '#ff453a', orange: '#ff9f0a', yellow: '#ffd60a', green: '#30d158',
+  blue: '#64d2ff', cyan: '#64d2ff', purple: '#bf5af2', pink: '#ff375f',
+  white: '#ffffff', gray: '#8e8e93', grey: '#8e8e93',
+};
+
+function stripMarkup(t) {
+  return t.replace(/\{(?:[a-zA-Z]+|#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6}))\s*:\s*([^}]*)\}/g, '$1');
+}
+
+let wordCount = 0;
 
 function buildContent(body) {
   els.content.innerHTML = '';
-  wordSpans = [];
-  lineData = [];
-  hlLine = -1;
+  const re = /\{([a-zA-Z]+|#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6}))\s*:\s*([^}]*)\}/g;
   const frag = document.createDocumentFragment();
-  for (const part of body.split(/(\s+)/)) {
-    if (!part) continue;
-    if (/^\s+$/.test(part)) {
-      frag.appendChild(document.createTextNode(part));
-    } else {
+  let last = 0, m;
+  while ((m = re.exec(body))) {
+    if (m.index > last) frag.appendChild(document.createTextNode(body.slice(last, m.index)));
+    const color = m[1].startsWith('#') ? m[1] : INK[m[1].toLowerCase()];
+    if (color) {
       const sp = document.createElement('span');
-      sp.className = 'w';
-      sp.textContent = part;
+      sp.style.color = color;
+      sp.textContent = m[2];
       frag.appendChild(sp);
-      wordSpans.push(sp);
+    } else {
+      frag.appendChild(document.createTextNode(m[2]));
     }
+    last = m.index + m[0].length;
   }
-  lineHlBar = document.createElement('div');
-  lineHlBar.id = 'line-hl';
-  frag.appendChild(lineHlBar);
+  if (last < body.length) frag.appendChild(document.createTextNode(body.slice(last)));
   els.content.appendChild(frag);
-}
-
-function computeLineData() {
-  lineData = [];
-  hlLine = -1;
-  if (lineHlBar) lineHlBar.style.display = 'none';
-  if (!settings.highlight || wordSpans.length === 0) return;
-  const gy = guideY();
-  const lineAdvance = settings.fontSize * settings.lineHeight;
-  const tops = wordSpans.map(sp => sp.offsetTop);
-  let i = 0;
-  while (i < wordSpans.length) {
-    let j = i;
-    while (j < wordSpans.length && tops[j] === tops[i]) j++;
-    // Gap to the next line can span blank lines; the bar covers one line box.
-    const nextTop = j < wordSpans.length ? tops[j] : tops[i] + lineAdvance;
-    const height = Math.max(1, Math.min(nextTop - tops[i], lineAdvance));
-    const spanH = wordSpans[i].offsetHeight;
-    lineData.push({
-      trigger: tops[i] - gy,
-      top: tops[i] - Math.max(0, (height - spanH) / 2),
-      height,
-    });
-    i = j;
-  }
-}
-
-function updateHighlight() {
-  if (lineData.length === 0) return;
-  // Binary search: last line whose trigger position has been passed
-  let lo = 0, hi = lineData.length - 1, idx = 0;
-  while (lo <= hi) {
-    const mid = (lo + hi) >> 1;
-    if (lineData[mid].trigger <= prompter.pos) { idx = mid; lo = mid + 1; }
-    else hi = mid - 1;
-  }
-  if (idx !== hlLine) {
-    hlLine = idx;
-    const line = lineData[idx];
-    lineHlBar.style.display = 'block';
-    lineHlBar.style.top = line.top + 'px';
-    lineHlBar.style.height = line.height + 'px';
-  }
+  const visible = stripMarkup(body);
+  wordCount = visible.trim() ? visible.trim().split(/\s+/).length : 0;
 }
 
 function layoutContent() {
@@ -318,16 +324,20 @@ function layoutContent() {
   c.style.color = settings.color;
   c.style.paddingLeft = settings.margin + '%';
   c.style.paddingRight = settings.margin + '%';
-  c.style.paddingTop = guideY() + 'px';
-  c.style.paddingBottom = (window.innerHeight - guideY()) + 'px';
+  const lineBox = settings.fontSize * settings.lineHeight;
+  c.style.paddingTop = Math.max(0, guideY() - lineBox / 2) + 'px';
+  c.style.paddingBottom = Math.max(0, window.innerHeight - guideY() - lineBox / 2) + 'px';
   c.classList.toggle('caps', settings.caps);
   els.flipWrap.classList.toggle('mirror-h', settings.mirrorH);
   els.flipWrap.classList.toggle('mirror-v', settings.mirrorV);
   els.guide.style.display = settings.guide ? '' : 'none';
-  els.guide.style.top = guideY() + 'px';
+  els.guide.style.top = Math.max(0, guideY() - lineBox / 2) + 'px';
+  els.guide.style.height = lineBox + 'px';
   prompter.maxPos = Math.max(1, c.scrollHeight - window.innerHeight);
   prompter.pos = Math.min(prompter.pos, prompter.maxPos);
-  computeLineData();
+  if (wordCount > 0 && prompter.maxPos > 1) {
+    pxPerWord = prompter.maxPos / wordCount;
+  }
   applyTransform();
   updateSpeedLabel();
 }
@@ -336,19 +346,18 @@ function applyTransform() {
   els.content.style.transform = `translateY(${-prompter.pos}px)`;
   const pct = (prompter.pos / prompter.maxPos) * 100;
   els.progressFill.style.width = pct.toFixed(2) + '%';
-  updateHighlight();
 }
 
 function updateTimeLeft() {
   const remainPx = Math.max(0, prompter.maxPos - prompter.pos);
-  const secs = Math.round(remainPx / Math.max(1, settings.speed));
+  const secs = Math.round(remainPx / Math.max(1, scrollRate()));
   const m = Math.floor(secs / 60), s = secs % 60;
   els.timeLeft.textContent = `${m}:${String(s).padStart(2, '0')}`;
 }
 
 function updateSpeedLabel() {
-  els.speedValue.textContent = settings.speed;
-  $('val-speed') && ($('val-speed').textContent = settings.speed);
+  els.speedValue.innerHTML = settings.wpm + '<small> wpm</small>';
+  $('val-speed') && ($('val-speed').textContent = settings.wpm + ' wpm');
 }
 
 let lastTimeUpdate = 0;
@@ -356,7 +365,7 @@ function frame(t) {
   if (prompter.playing) {
     if (prompter.lastT != null) {
       const dt = Math.min(0.1, (t - prompter.lastT) / 1000);
-      prompter.pos += settings.speed * dt;
+      prompter.pos += scrollRate() * dt;
       if (prompter.pos >= prompter.maxPos) {
         prompter.pos = prompter.maxPos;
         setPlaying(false);
@@ -431,8 +440,8 @@ function scheduleBarsHide() {
 /* Actions (used by both remote keys and on-screen buttons) */
 const actionHandlers = {
   playPause: () => togglePlay(),
-  faster: () => { settings.speed = Math.min(300, settings.speed + 5); saveSettings(); updateSpeedLabel(); updateTimeLeft(); },
-  slower: () => { settings.speed = Math.max(10, settings.speed - 5); saveSettings(); updateSpeedLabel(); updateTimeLeft(); },
+  faster: () => { settings.wpm = Math.min(240, settings.wpm + 5); saveSettings(); updateSpeedLabel(); updateTimeLeft(); },
+  slower: () => { settings.wpm = Math.max(60, settings.wpm - 5); saveSettings(); updateSpeedLabel(); updateTimeLeft(); },
   back: () => { prompter.pos = Math.max(0, prompter.pos - window.innerHeight * 0.25); applyTransform(); updateTimeLeft(); },
   forward: () => { prompter.pos = Math.min(prompter.maxPos, prompter.pos + window.innerHeight * 0.25); applyTransform(); updateTimeLeft(); },
   restart: () => { prompter.pos = 0; applyTransform(); updateTimeLeft(); },
@@ -540,13 +549,13 @@ function bindRange(id, key, valId, fmt) {
     saveSettings();
     $(valId).textContent = fmt(settings[key]);
     if (currentView === 'prompter') layoutContent();
-    if (key === 'speed') { updateSpeedLabel(); updateTimeLeft(); }
+    if (key === 'wpm') { updateSpeedLabel(); updateTimeLeft(); }
   });
 }
 bindRange('set-font', 'fontSize', 'val-font', v => v + 'px');
 bindRange('set-lineheight', 'lineHeight', 'val-lineheight', v => v.toFixed(1));
 bindRange('set-margin', 'margin', 'val-margin', v => v + '%');
-bindRange('set-speed', 'speed', 'val-speed', v => v);
+bindRange('set-speed', 'wpm', 'val-speed', v => v + ' wpm');
 
 function bindToggle(id, key) {
   $(id).addEventListener('change', (e) => {
@@ -559,7 +568,6 @@ bindToggle('set-caps', 'caps');
 bindToggle('set-mirror-h', 'mirrorH');
 bindToggle('set-mirror-v', 'mirrorV');
 bindToggle('set-guide', 'guide');
-bindToggle('set-highlight', 'highlight');
 bindToggle('set-countdown', 'countdown');
 
 document.querySelectorAll('.swatch').forEach(btn => {
@@ -578,13 +586,12 @@ function syncSettingsUI() {
   $('val-lineheight').textContent = settings.lineHeight.toFixed(1);
   $('set-margin').value = settings.margin;
   $('val-margin').textContent = settings.margin + '%';
-  $('set-speed').value = settings.speed;
-  $('val-speed').textContent = settings.speed;
+  $('set-speed').value = settings.wpm;
+  $('val-speed').textContent = settings.wpm + ' wpm';
   $('set-caps').checked = settings.caps;
   $('set-mirror-h').checked = settings.mirrorH;
   $('set-mirror-v').checked = settings.mirrorV;
   $('set-guide').checked = settings.guide;
-  $('set-highlight').checked = settings.highlight;
   $('set-countdown').checked = settings.countdown;
   document.querySelectorAll('.swatch').forEach(b =>
     b.classList.toggle('active', b.dataset.color === settings.color));

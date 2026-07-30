@@ -6,8 +6,9 @@ pedals, and clickers. No accounts, no server — scripts are stored on the devic
 ## Features
 
 - **Script library** — create, edit, import `.txt` / `.md` files; autosaved locally
-- **Smooth auto-scroll** with adjustable speed (works while paused too: jump back/forward, restart)
-- **Line highlight** — the current line is highlighted at the reading guide as the text scrolls
+- **Smooth auto-scroll** with pace set in words per minute — the scroll rate is derived from the script's layout, so font/margin changes never alter your spoken pace (jump back/forward and restart work while paused too)
+- **Reading line highlight** — a fixed band at eye level; the text scrolls through it so your eyes never move
+- **Inline word colors** — select text in the editor and tap a color dot; stored as `{yellow:like this}` markup (named colors or `{#hex:…}`)
 - **Mirror mode** — flip the image horizontally (and/or vertically) for beam-splitter teleprompter glass
 - **Reading guide**, progress bar, estimated time remaining, 3-second countdown
 - Adjustable **font size, line height, side margins, text color, ALL CAPS**
