@@ -114,7 +114,7 @@ describe('replay harness', () => {
    Tape "before": bogus advances at t=4543/4757 (é-conjunction
    segmentation bug + stopword finals), 19.7s hostage on the "prompter"
    phrase, duplicate re-emission cross-credits. Pins the A.2 behavior. */
-import ptbrRig1 from './fixtures/ptbr-rig-1.json';
+import ptbrRig1 from './fixtures/rigtest-pt-2026-07-30.json';
 
 describe('fixture ptbr-rig-1 (real tape)', () => {
   const log = ptbrRig1 as unknown as SessionLog;
