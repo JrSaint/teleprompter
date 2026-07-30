@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<title>Teleprompter</title>
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Prompter">
+<meta name="theme-color" content="#000000">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icon-180.png">
+<link rel="icon" type="image/png" href="icon-180.png">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<!-- ============ LIBRARY ============ -->
+<div id="view-library" class="view">
+  <header class="lib-header">
+    <h1>Teleprompter</h1>
+    <div class="lib-actions">
+      <button id="btn-import" class="ghost">Import .txt</button>
+      <button id="btn-settings" class="ghost" title="Settings">⚙︎ Settings</button>
+      <button id="btn-new" class="primary">＋ New Script</button>
+    </div>
+  </header>
+  <main id="script-list"></main>
+  <input type="file" id="file-input" hidden accept=".txt,.md,text/plain">
+</div>
+
+<!-- ============ EDITOR ============ -->
+<div id="view-editor" class="view" hidden>
+  <header class="editor-header">
+    <button id="btn-editor-back" class="ghost">‹ Library</button>
+    <input id="editor-title" placeholder="Untitled script" autocomplete="off">
+    <button id="btn-editor-play" class="primary">▶ Prompt</button>
+  </header>
+  <textarea id="editor-body" placeholder="Paste or type your script here…" spellcheck="false"></textarea>
+</div>
+
+<!-- ============ PROMPTER ============ -->
+<div id="view-prompter" class="view" hidden>
+  <div id="flip-wrap">
+    <div id="stage">
+      <div id="content"></div>
+    </div>
+    <div id="guide"><span class="guide-arrow">▶</span><span class="guide-line"></span></div>
+  </div>
+
+  <div id="progress"><div id="progress-fill"></div></div>
+
+  <div id="top-bar" class="bar">
+    <button id="btn-exit" class="bar-btn" title="Exit">✕</button>
+    <div id="prompter-title"></div>
+    <div id="time-left" title="Estimated time remaining">–:––</div>
+    <button id="btn-fullscreen" class="bar-btn" title="Fullscreen">⛶</button>
+    <button id="btn-prompter-settings" class="bar-btn" title="Settings">Aa</button>
+  </div>
+
+  <div id="bottom-bar" class="bar">
+    <button id="btn-restart" class="bar-btn" title="Restart">⏮</button>
+    <button id="btn-back" class="bar-btn" title="Jump back">↑</button>
+    <button id="btn-playpause" class="bar-btn big" title="Play / Pause">▶</button>
+    <button id="btn-forward" class="bar-btn" title="Jump forward">↓</button>
+    <div class="speed-group">
+      <button id="btn-slower" class="bar-btn" title="Slower">−</button>
+      <div id="speed-value" title="Scroll speed">70</div>
+      <button id="btn-faster" class="bar-btn" title="Faster">＋</button>
+    </div>
+  </div>
+
+  <div id="countdown" hidden></div>
+</div>
+
+<!-- ============ SETTINGS MODAL ============ -->
+<div id="settings-modal" hidden>
+  <div id="settings-panel">
+    <header>
+      <h2>Settings</h2>
+      <button id="btn-settings-close" class="ghost">Done</button>
+    </header>
+
+    <section>
+      <h3>Display</h3>
+      <label class="row">
+        <span>Font size <b id="val-font"></b></span>
+        <input type="range" id="set-font" min="24" max="120" step="2">
+      </label>
+      <label class="row">
+        <span>Line height <b id="val-lineheight"></b></span>
+        <input type="range" id="set-lineheight" min="1.2" max="2.2" step="0.1">
+      </label>
+      <label class="row">
+        <span>Side margin <b id="val-margin"></b></span>
+        <input type="range" id="set-margin" min="0" max="25" step="1">
+      </label>
+      <div class="row">
+        <span>Text color</span>
+        <div class="swatches" id="color-swatches">
+          <button class="swatch" data-color="#ffffff" style="background:#ffffff"></button>
+          <button class="swatch" data-color="#ffd60a" style="background:#ffd60a"></button>
+          <button class="swatch" data-color="#30d158" style="background:#30d158"></button>
+          <button class="swatch" data-color="#64d2ff" style="background:#64d2ff"></button>
+        </div>
+      </div>
+      <label class="row toggle"><span>ALL CAPS</span><input type="checkbox" id="set-caps"></label>
+      <label class="row toggle"><span>Mirror horizontally <small>(beam-splitter glass)</small></span><input type="checkbox" id="set-mirror-h"></label>
+      <label class="row toggle"><span>Mirror vertically</span><input type="checkbox" id="set-mirror-v"></label>
+      <label class="row toggle"><span>Reading guide</span><input type="checkbox" id="set-guide"></label>
+      <label class="row toggle"><span>Highlight current word</span><input type="checkbox" id="set-highlight"></label>
+      <label class="row toggle"><span>3-second countdown</span><input type="checkbox" id="set-countdown"></label>
+    </section>
+
+    <section>
+      <h3>Speed</h3>
+      <label class="row">
+        <span>Scroll speed <b id="val-speed"></b></span>
+        <input type="range" id="set-speed" min="10" max="300" step="5">
+      </label>
+    </section>
+
+    <section>
+      <h3>Bluetooth Remote</h3>
+      <p class="hint">Pair your remote, pedal, or clicker with the iPad in <b>Settings&nbsp;›&nbsp;Bluetooth</b> first — it shows up as a keyboard. Then press any button on it below to see what it sends, and map it to an action.</p>
+      <div id="last-key">Press a button on your remote…</div>
+      <div id="keymap-list"></div>
+    </section>
+  </div>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>
