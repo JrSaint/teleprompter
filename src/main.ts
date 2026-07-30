@@ -41,10 +41,14 @@ function showPrompter(script: Script, settings: Settings): void {
   show(view);
   // Debug/simulation handle: lets development and automated checks feed
   // words end-to-end without a microphone (also used by unit-less rig
-  // dry runs on the Mac). Harmless in production.
+  // dry runs on the Mac). Force-arms first, since a denied/absent mic
+  // correctly returns the flow to idle. Harmless in production.
   (window as unknown as Record<string, unknown>).__vf = {
     controller: view.controller,
-    feed: (words: string[]) => view.controller.consume(words),
+    feed: (words: string[]) => {
+      if (!view.controller.running) view.controller.flow.to('armed');
+      view.controller.consume(words);
+    },
     diag,
   };
 }

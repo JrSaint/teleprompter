@@ -63,13 +63,23 @@ describe('matcher', () => {
 
   it('skips forward when a later phrase is clearly spoken', () => {
     const { m, phrases } = build(
-      'First we gather in the hall. / Then we march across the bridge. / Finally we sing the anthem loudly.',
+      'First we gather in the hall. / Then we march across the bridge.',
     );
     expect(phrases.length).toBeGreaterThanOrEqual(3);
-    // speaker jumps straight to the "finally" phrase
-    const r = m.feed(['finally', 'we', 'sing', 'anthem', 'loudly']);
-    expect(r.events.some((e) => e.type === 'jump' || e.type === 'advance')).toBe(true);
+    // speaker skips the rest of sentence one and starts sentence two,
+    // which lives within the 3-phrase lookahead window
+    const r = m.feed(['then', 'we', 'march', 'across']);
+    expect(r.events.some((e) => e.type === 'jump')).toBe(true);
     expect(m.current).toBeGreaterThanOrEqual(2);
+  });
+
+  it('can finish the script normally after a jump', () => {
+    const { m } = build(
+      'First we gather in the hall. / Then we march across the bridge.',
+    );
+    m.feed(['then', 'we', 'march', 'across']); // jump into sentence two
+    const r = m.feed(['the', 'bridge']);
+    expect(r.finished || m.current >= 3).toBe(true);
   });
 
   it('never auto-jumps backward', () => {
@@ -90,6 +100,35 @@ describe('matcher', () => {
     // 4 of 5 content words, final word "blue" never said → 80% ≥ 70%
     const r = m.feed(['red', 'orange', 'yellow', 'green']);
     expect(r.events.some((e) => e.type === 'advance')).toBe(true);
+  });
+
+  it('does not advance on a lone fuzzy stopword hit on the final word', () => {
+    // "not" (off-script, in the stopword list) is Levenshtein-1 from
+    // final content word "now" — a single fuzzy hit must NOT advance
+    const { m } = build('Leave the stage now. Wait for the applause please.');
+    const r = m.feed(['not']);
+    expect(r.events.length).toBe(0);
+    expect(m.current).toBe(0);
+    // …but actually speaking the phrase still advances
+    m.feed(['leave', 'the', 'stage', 'now']);
+    expect(m.current).toBe(1);
+  });
+
+  it('prefers exact token matches over earlier fuzzy-similar tokens', () => {
+    // phrase has both "star" and "stars"; spoken "stars" (exact for the
+    // final word) must not be consumed by the earlier "star"
+    const { m } = build('The star counts stars. Another phrase entirely here now.');
+    m.feed(['the', 'star', 'counts', 'stars']);
+    expect(m.current).toBe(1);
+  });
+
+  it('does not chain-advance through lookahead credits alone', () => {
+    // adjacent phrases share every word; speaking the line once must
+    // advance exactly one phrase, not rush through the repeat
+    const { m, phrases } = build('Holy holy holy. / Holy holy holy. / Amen forever and ever.');
+    expect(phrases.length).toBeGreaterThanOrEqual(3);
+    m.feed(['holy', 'holy', 'holy']);
+    expect(m.current).toBe(1);
   });
 
   it('supports manual navigation including backward', () => {

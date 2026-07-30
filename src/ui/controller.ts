@@ -44,6 +44,12 @@ export class PrompterController {
     speech.onStatus = (s, detail) => {
       this.micStatus = s;
       this.ev.onMic(s, detail);
+      // Terminal mic failure: the state machine must not sit in "armed"
+      // claiming to listen when nothing ever will. (Transient 'error'
+      // keeps restarting and is not terminal.)
+      if ((s === 'denied' || s === 'unavailable') && this.running) {
+        this.stopMic();
+      }
     };
     speech.onWords = (words) => this.consume(words);
   }

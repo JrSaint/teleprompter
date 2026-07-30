@@ -34,6 +34,8 @@ export class PhraseMatcher {
   private phrases: Phrase[];
   private cfg: MatcherConfig;
   private matched = new Map<number, Set<number>>(); // phrase → matched token idx
+  private exact = new Map<number, Set<number>>();   // subset matched exactly
+  private touchedCurrent = false; // a word matched the phrase WHILE current
   current = 0;
   finished = false;
 
@@ -53,14 +55,19 @@ export class PhraseMatcher {
     return hit / ph.contentIdx.length;
   }
 
-  private finalContentMatched(p: number): boolean {
+  /** 'none' | 'fuzzy' | 'exact' for the phrase's final content token. */
+  private finalContentMatched(p: number): 'none' | 'fuzzy' | 'exact' {
     const ph = this.phrases[p];
     const set = this.matched.get(p);
-    if (!ph || !set || ph.contentIdx.length === 0) return false;
-    return set.has(ph.contentIdx[ph.contentIdx.length - 1]);
+    if (!ph || !set || ph.contentIdx.length === 0) return 'none';
+    const finalIdx = ph.contentIdx[ph.contentIdx.length - 1];
+    if (!set.has(finalIdx)) return 'none';
+    return this.exact.get(p)?.has(finalIdx) ? 'exact' : 'fuzzy';
   }
 
-  /** Try to mark one token of phrase p as matched by word w. */
+  /** Try to mark one token of phrase p as matched by word w.
+      Exact matches take priority over fuzzy ones so a precisely spoken
+      final word is never consumed by an earlier similar token. */
   private tryMatch(p: number, w: string): boolean {
     const ph = this.phrases[p];
     if (!ph) return false;
@@ -68,6 +75,19 @@ export class PhraseMatcher {
     if (!set) {
       set = new Set();
       this.matched.set(p, set);
+    }
+    for (let t = 0; t < ph.tokens.length; t++) {
+      if (set.has(t)) continue;
+      if (w === ph.tokens[t]) {
+        set.add(t);
+        let ex = this.exact.get(p);
+        if (!ex) {
+          ex = new Set();
+          this.exact.set(p, ex);
+        }
+        ex.add(t);
+        return true;
+      }
     }
     for (let t = 0; t < ph.tokens.length; t++) {
       if (set.has(t)) continue;
@@ -81,7 +101,10 @@ export class PhraseMatcher {
 
   private dropBefore(idx: number): void {
     for (const key of [...this.matched.keys()]) {
-      if (key < idx) this.matched.delete(key);
+      if (key < idx) {
+        this.matched.delete(key);
+        this.exact.delete(key);
+      }
     }
   }
 
@@ -102,35 +125,39 @@ export class PhraseMatcher {
         this.phrases.length - 1,
       );
       for (let p = this.current; p <= windowEnd; p++) {
-        if (this.tryMatch(p, w)) matchedAny = true;
+        if (this.tryMatch(p, w)) {
+          matchedAny = true;
+          if (p === this.current) this.touchedCurrent = true;
+        }
       }
 
-      // evaluate advancement after every word so multi-word feeds can
-      // advance through several phrases in order
-      let moved = true;
-      while (moved && !this.finished) {
-        moved = false;
-
-        // complete: final content word said, or ≥ advancePct of content
-        if (
-          this.finalContentMatched(this.current) ||
-          this.progress(this.current) >= this.cfg.advancePct
-        ) {
+      // Advancement requires evidence gathered while the phrase was
+      // actually current (touchedCurrent) — carried lookahead credits
+      // alone never advance, so shared words between adjacent phrases
+      // can't chain the display ahead of the speaker. At most one
+      // advance and one jump per recognized word.
+      if (!this.finished && this.touchedCurrent) {
+        const final = this.finalContentMatched(this.current);
+        const pct = this.progress(this.current);
+        // A lone fuzzy hit on the final word is not enough — it must be
+        // exact, or come with half the phrase's content already matched.
+        const finalOk =
+          final === 'exact' || (final === 'fuzzy' && pct >= 0.5);
+        if (finalOk || pct >= this.cfg.advancePct) {
           this.current++;
+          this.touchedCurrent = false;
           this.dropBefore(this.current);
           if (this.current >= this.phrases.length) {
             this.finished = true;
             this.current = this.phrases.length - 1;
-            events.push({ type: 'advance', to: this.current });
-          } else {
-            events.push({ type: 'advance', to: this.current });
           }
-          moved = true;
-          continue;
+          events.push({ type: 'advance', to: this.current });
         }
+      }
 
-        // skip: a later phrase is clearly being spoken while the
-        // current one was barely touched — jump forward, never back
+      // skip: a later phrase is clearly being spoken while the current
+      // one was barely touched — jump forward, never back
+      if (!this.finished) {
         const wEnd = Math.min(
           this.current + this.cfg.lookahead,
           this.phrases.length - 1,
@@ -139,9 +166,12 @@ export class PhraseMatcher {
           for (let j = this.current + 1; j <= wEnd; j++) {
             if (this.progress(j) >= this.cfg.advancePct) {
               this.current = j;
+              // The jump's evidence IS the speaker saying phrase j, so
+              // it counts as touched — otherwise a fully-spoken jump
+              // target could never advance again.
+              this.touchedCurrent = true;
               this.dropBefore(j);
               events.push({ type: 'jump', to: j });
-              moved = true;
               break;
             }
           }
@@ -156,6 +186,8 @@ export class PhraseMatcher {
     this.current = Math.max(0, Math.min(index, this.phrases.length - 1));
     this.finished = false;
     this.matched.clear();
+    this.exact.clear();
+    this.touchedCurrent = false;
   }
 
   get length(): number {

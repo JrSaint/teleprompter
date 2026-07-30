@@ -42,6 +42,46 @@ describe('segmenter', () => {
     expect(out[0].text.startsWith('Stop.')).toBe(true);
   });
 
+  it('orphan merge steals one word, keeping both phrases within caps', () => {
+    const out = texts('Stop. Everything you know is wrong.');
+    expect(out).toEqual(['Stop. Everything', 'you know is wrong.']);
+    for (const p of segmentScript('Stop. Everything you know is wrong.', 'en-US')) {
+      expect(p.words.length).toBeLessThanOrEqual(5);
+    }
+  });
+
+  it('keeps intra-word slashes intact (24/7, and/or, dates)', () => {
+    const out = segmentScript('We are open 24/7 every day', 'en-US');
+    expect(out.map((p) => p.text).join(' ')).toContain('24/7');
+    const out2 = segmentScript('You can call and/or write to us', 'en-US');
+    expect(out2.map((p) => p.text).join(' ')).toContain('and/or');
+  });
+
+  it('still honors leading/trailing slash break markers', () => {
+    expect(texts('Hold the line/ no matter what happens')[0]).toBe('Hold the line');
+    expect(texts('Hold the line /no matter what happens')[0]).toBe('Hold the line');
+  });
+
+  it('never emits a phrase with no matchable tokens (punctuation-only)', () => {
+    const out = segmentScript('Take a breath / — — / then continue on', 'en-US');
+    for (const p of out) {
+      expect(p.tokens.length).toBeGreaterThan(0);
+      expect(p.contentIdx.length).toBeGreaterThan(0);
+    }
+  });
+
+  it('joins words split by adjacent markup (un{yellow:believable})', () => {
+    const out = segmentScript('It was un{yellow:believable} scenes tonight everyone', 'en-US');
+    const all = out.map((p) => p.text).join(' ');
+    expect(all).toContain('unbelievable');
+    expect(out.flatMap((p) => p.tokens)).toContain('unbelievable');
+  });
+
+  it('treats a spaced ASCII hyphen as a tier-2 break', () => {
+    const out = texts('First we gather - then we march together');
+    expect(out[0]).toBe('First we gather -');
+  });
+
   it('keeps phrases under ~30 characters when unbroken text is long', () => {
     const long = 'supercalifragilistic expialidocious antidisestablishmentarianism words continue here now';
     for (const p of segmentScript(long, 'en-US')) {

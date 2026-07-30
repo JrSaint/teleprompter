@@ -28,32 +28,75 @@ interface RawWord extends PhraseWord {
 }
 
 function tokenize(body: string, lang: Lang): RawWord[] {
-  const words: RawWord[] = [];
-  const bump = (strength: number) => {
-    if (words.length > 0 && words[words.length - 1].breakAfter < strength) {
-      words[words.length - 1].breakAfter = strength;
-    }
-  };
+  // Pass 1: split runs into words, joining fragments across markup
+  // boundaries when no whitespace separates them ("un{yellow:believable}"
+  // is ONE word — the tagged fragment's tag wins for the whole word).
+  const joined: RawWord[] = [];
+  let glueNext = false;
+  let pendingNewline = false;
   for (const run of parseInline(body)) {
     for (const piece of run.text.split(/(\s+)/)) {
       if (!piece) continue;
       if (/^\s+$/.test(piece)) {
-        if (piece.includes('\n')) bump(3);
+        glueNext = false;
+        if (piece.includes('\n')) pendingNewline = true;
         continue;
       }
-      // "/" is a manual phrase break, never displayed
-      const parts = piece.split('/');
-      parts.forEach((part, idx) => {
-        if (part) {
-          const w: RawWord = { text: part, tag: run.tag, breakAfter: 0 };
-          if (/[.!?…]["'")\]]*$/.test(part)) w.breakAfter = 3;
-          else if (/[,;:—–]$/.test(part)) w.breakAfter = 2;
-          words.push(w);
+      if (glueNext && joined.length > 0 && !pendingNewline) {
+        const prev = joined[joined.length - 1];
+        prev.text += piece;
+        if (prev.tag === undefined && run.tag !== undefined) prev.tag = run.tag;
+      } else {
+        joined.push({ text: piece, tag: run.tag, breakAfter: 0 });
+        if (pendingNewline && joined.length > 1) {
+          joined[joined.length - 2].breakAfter = 3;
         }
-        if (idx < parts.length - 1) bump(3); // the "/" itself
-      });
+        pendingNewline = false;
+      }
+      glueNext = true;
     }
   }
+
+  // Pass 2: slashes as manual break markers (standalone, leading, or
+  // trailing only — never inside a word like "24/7"), standalone dashes
+  // as tier-2 breaks, then punctuation strengths.
+  const words: RawWord[] = [];
+  const bumpPrev = (strength: number) => {
+    if (words.length > 0 && words[words.length - 1].breakAfter < strength) {
+      words[words.length - 1].breakAfter = strength;
+    }
+  };
+  for (const w of joined) {
+    let text = w.text;
+    let ba = w.breakAfter;
+    if (/^\/+$/.test(text)) {
+      bumpPrev(3);
+      continue;
+    }
+    if (/^\/+/.test(text)) {
+      text = text.replace(/^\/+/, '');
+      bumpPrev(3);
+    }
+    const trail = text.match(/\/+$/);
+    if (trail && trail[0].length < text.length) {
+      text = text.slice(0, -trail[0].length);
+      ba = Math.max(ba, 3);
+    }
+    if (/^[-–—]+$/.test(text)) {
+      // spaced dash: keep it visible on the previous word, tier-2 break
+      if (words.length > 0) {
+        words[words.length - 1].text += ' ' + text;
+        bumpPrev(2);
+        if (ba > 0) bumpPrev(ba);
+      }
+      continue;
+    }
+    if (!text) continue;
+    if (/[.!?…]["'")\]]*$/.test(text)) ba = Math.max(ba, 3);
+    else if (/[,;:—–]$/.test(text)) ba = Math.max(ba, 2);
+    words.push({ text, tag: w.tag, breakAfter: ba });
+  }
+
   // conjunction rule: prefer to break BEFORE these words
   for (let i = 1; i < words.length; i++) {
     if (isConjunction(normalizeWord(words[i].text), lang)) {
@@ -90,19 +133,45 @@ function chunk(words: RawWord[]): RawWord[][] {
     phrases.push(words.slice(i, cut + 1));
     i = cut + 1;
   }
-  // never leave a 1-word orphan: merge it forward (backward if it's last)
-  for (let p = 0; p < phrases.length; ) {
-    if (phrases[p].length === 1 && phrases.length > 1) {
-      if (p + 1 < phrases.length) {
-        phrases[p + 1] = [...phrases[p], ...phrases[p + 1]];
-        phrases.splice(p, 1);
-      } else {
-        phrases[p - 1] = [...phrases[p - 1], ...phrases[p]];
+  // Never leave a 1-word orphan (or a phrase with no matchable tokens —
+  // e.g. standalone punctuation). Prefer stealing a single word from a
+  // neighbor so both phrases stay within the word cap; swallow the whole
+  // neighbor only when it's too small to give one up. Direction: a
+  // sentence-final orphan ("…the hall.") rebalances BACKWARD within its
+  // own sentence — merging it forward would glue two sentences together
+  // and scatter phrases the matcher then can't align.
+  const degenerate = (ph: RawWord[]) =>
+    ph.length === 1 || ph.every((w) => !normalizeWord(w.text));
+  for (let p = 0; p < phrases.length && phrases.length > 1; ) {
+    const ph = phrases[p];
+    if (!degenerate(ph)) {
+      p++;
+      continue;
+    }
+    const sentenceEnd = ph[ph.length - 1].breakAfter >= 3;
+    const canBack = p > 0;
+    const canFwd = p + 1 < phrases.length;
+    if ((sentenceEnd && canBack) || !canFwd) {
+      const prev = phrases[p - 1];
+      if (prev.length <= 2 || ph.length > 1) {
+        phrases[p - 1] = [...prev, ...ph];
         phrases.splice(p, 1);
         p--;
+      } else {
+        phrases[p] = [prev[prev.length - 1], ...ph];
+        phrases[p - 1] = prev.slice(0, -1);
+        p++;
       }
     } else {
-      p++;
+      const nxt = phrases[p + 1];
+      if (nxt.length <= 2 || ph.length > 1) {
+        phrases[p + 1] = [...ph, ...nxt];
+        phrases.splice(p, 1);
+      } else {
+        phrases[p] = [...ph, nxt[0]];
+        phrases[p + 1] = nxt.slice(1);
+        p++;
+      }
     }
   }
   return phrases;
