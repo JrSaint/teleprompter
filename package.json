@@ -1,0 +1,23 @@
+{
+  "name": "voice-prompter",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "dev:https": "VP_HTTPS=1 vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "localforage": "^1.10.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.5.0",
+    "vite": "^5.4.0",
+    "vite-plugin-mkcert": "^1.17.0",
+    "vitest": "^2.0.0"
+  }
+}
