@@ -88,7 +88,7 @@ Out of the box: space or enter plays and pauses. Down arrow or page down speeds 
 
 If your remote sends different keys, open Settings, press a button on the remote, and map it to any action.
 
-Notice how the current word lights up as the text scrolls, so you never lose your place. You can turn this off in Settings.
+Notice how the current line is highlighted as the text scrolls, so you never lose your place. You can turn this off in Settings.
 
 In Settings you can also change font size, speed, margins, and colors, and turn on mirror mode to flip the whole image for beam-splitter teleprompter glass.
 
@@ -233,20 +233,22 @@ const prompter = {
 
 function guideY() { return window.innerHeight * 0.35; }
 
-/* --- Word-by-word highlighting ------------------------------------
-   The script body is split into word <span>s. After layout we compute,
-   for every word, the scroll position at which it crosses the reading
-   guide (interpolating across words that share a visual line), so the
-   highlight advances word by word in sync with the scroll. */
+/* --- Line highlighting --------------------------------------------
+   The script body is split into word <span>s so visual lines can be
+   measured after layout. Each line gets a trigger: the scroll position
+   at which it crosses the reading guide. A highlight bar sits behind
+   the current line and steps down line by line, in sync with the
+   scroll. */
 let wordSpans = [];
-let wordTriggers = [];
-let hlIndex = -1;
+let lineData = [];   // { trigger, top, height } per visual line
+let hlLine = -1;
+let lineHlBar = null;
 
 function buildContent(body) {
   els.content.innerHTML = '';
   wordSpans = [];
-  wordTriggers = [];
-  hlIndex = -1;
+  lineData = [];
+  hlLine = -1;
   const frag = document.createDocumentFragment();
   for (const part of body.split(/(\s+)/)) {
     if (!part) continue;
@@ -260,44 +262,52 @@ function buildContent(body) {
       wordSpans.push(sp);
     }
   }
+  lineHlBar = document.createElement('div');
+  lineHlBar.id = 'line-hl';
+  frag.appendChild(lineHlBar);
   els.content.appendChild(frag);
 }
 
-function computeWordTriggers() {
-  wordTriggers = [];
-  if (hlIndex >= 0 && wordSpans[hlIndex]) wordSpans[hlIndex].classList.remove('hl');
-  hlIndex = -1;
+function computeLineData() {
+  lineData = [];
+  hlLine = -1;
+  if (lineHlBar) lineHlBar.style.display = 'none';
   if (!settings.highlight || wordSpans.length === 0) return;
   const gy = guideY();
-  const lineAdvanceFallback = settings.fontSize * settings.lineHeight;
+  const lineAdvance = settings.fontSize * settings.lineHeight;
   const tops = wordSpans.map(sp => sp.offsetTop);
   let i = 0;
   while (i < wordSpans.length) {
     let j = i;
     while (j < wordSpans.length && tops[j] === tops[i]) j++;
-    const nextTop = j < wordSpans.length ? tops[j] : tops[i] + lineAdvanceFallback;
-    const advance = Math.max(1, nextTop - tops[i]);
-    const count = j - i;
-    for (let k = 0; k < count; k++) {
-      wordTriggers.push(tops[i] - gy + (k / count) * advance);
-    }
+    // Gap to the next line can span blank lines; the bar covers one line box.
+    const nextTop = j < wordSpans.length ? tops[j] : tops[i] + lineAdvance;
+    const height = Math.max(1, Math.min(nextTop - tops[i], lineAdvance));
+    const spanH = wordSpans[i].offsetHeight;
+    lineData.push({
+      trigger: tops[i] - gy,
+      top: tops[i] - Math.max(0, (height - spanH) / 2),
+      height,
+    });
     i = j;
   }
 }
 
 function updateHighlight() {
-  if (wordTriggers.length === 0) return;
-  // Binary search: last word whose trigger position has been passed
-  let lo = 0, hi = wordTriggers.length - 1, idx = 0;
+  if (lineData.length === 0) return;
+  // Binary search: last line whose trigger position has been passed
+  let lo = 0, hi = lineData.length - 1, idx = 0;
   while (lo <= hi) {
     const mid = (lo + hi) >> 1;
-    if (wordTriggers[mid] <= prompter.pos) { idx = mid; lo = mid + 1; }
+    if (lineData[mid].trigger <= prompter.pos) { idx = mid; lo = mid + 1; }
     else hi = mid - 1;
   }
-  if (idx !== hlIndex) {
-    if (hlIndex >= 0 && wordSpans[hlIndex]) wordSpans[hlIndex].classList.remove('hl');
-    wordSpans[idx].classList.add('hl');
-    hlIndex = idx;
+  if (idx !== hlLine) {
+    hlLine = idx;
+    const line = lineData[idx];
+    lineHlBar.style.display = 'block';
+    lineHlBar.style.top = line.top + 'px';
+    lineHlBar.style.height = line.height + 'px';
   }
 }
 
@@ -317,7 +327,7 @@ function layoutContent() {
   els.guide.style.top = guideY() + 'px';
   prompter.maxPos = Math.max(1, c.scrollHeight - window.innerHeight);
   prompter.pos = Math.min(prompter.pos, prompter.maxPos);
-  computeWordTriggers();
+  computeLineData();
   applyTransform();
   updateSpeedLabel();
 }

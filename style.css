@@ -85,13 +85,19 @@ button { font: inherit; color: inherit; background: none; border: none; cursor: 
 
 #stage { position: absolute; inset: 0; overflow: hidden; }
 #content {
+  position: relative;
   will-change: transform;
   white-space: pre-wrap; word-wrap: break-word;
   font-weight: 600; letter-spacing: 0.01em;
 }
 #content.caps { text-transform: uppercase; }
-#content span.w { border-radius: 8px; padding: 0 0.08em; margin: 0 -0.08em; }
-#content span.w.hl { background: #ff9f0a; color: #000; }
+#line-hl {
+  position: absolute; left: 0; right: 0; z-index: -1;
+  background: rgba(255, 159, 10, 0.30);
+  border-radius: 10px;
+  transition: top 120ms ease-out;
+  display: none;
+}
 
 #guide {
   position: absolute; left: 0; right: 0; top: 35vh;

@@ -7,7 +7,7 @@ pedals, and clickers. No accounts, no server — scripts are stored on the devic
 
 - **Script library** — create, edit, import `.txt` / `.md` files; autosaved locally
 - **Smooth auto-scroll** with adjustable speed (works while paused too: jump back/forward, restart)
-- **Word-by-word highlight** — the current word lights up at the reading line as the text scrolls
+- **Line highlight** — the current line is highlighted at the reading guide as the text scrolls
 - **Mirror mode** — flip the image horizontally (and/or vertically) for beam-splitter teleprompter glass
 - **Reading guide**, progress bar, estimated time remaining, 3-second countdown
 - Adjustable **font size, line height, side margins, text color, ALL CAPS**
