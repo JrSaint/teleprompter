@@ -30,8 +30,10 @@ export function createPrompterView(
   el.id = 'prompter-view';
   el.innerHTML = `
     <div id="vp-flip">
-      <div id="vp-current" aria-live="off"></div>
-      <div id="vp-next"></div>
+      <div id="vp-block">
+        <div id="vp-current" aria-live="off"></div>
+        <div id="vp-next"></div>
+      </div>
       <div id="vp-done" hidden>— end of script —</div>
     </div>
     <div id="vp-status"></div>
@@ -57,12 +59,28 @@ export function createPrompterView(
   const diagEl = $('vp-diag');
   const armBtn = $('vp-arm');
 
-  // Rig display mode: mirror + distance-derived size
+  // Rig display mode: mirror + distance-derived size. Current and
+  // next are the SAME size — one continuous script, emphasis by
+  // brightness only — and the size is capped so the widest phrase of
+  // THIS script fits on one line (never wrap mid-phrase).
   flip.classList.toggle('mirror-h', settings.mirrorH);
   flip.classList.toggle('mirror-v', settings.mirrorV);
-  const fontPx = fontPxForDistance(settings.distanceFt, settings.sizeMult);
-  curEl.style.fontSize = fontPx + 'px';
-  nextEl.style.fontSize = Math.round(fontPx * 0.55) + 'px';
+  const baseFontPx = fontPxForDistance(settings.distanceFt, settings.sizeMult);
+  const fitFontPx = (): number => {
+    const ctx = document.createElement('canvas').getContext('2d');
+    if (!ctx) return baseFontPx;
+    ctx.font = '700 100px -apple-system, system-ui, sans-serif';
+    const widest = Math.max(1, ...phrases.map((p) => ctx.measureText(p.text).width));
+    const avail = window.innerWidth * 0.88; // block padding is 6vw/side
+    return Math.min(baseFontPx, Math.floor((avail / widest) * 100));
+  };
+  const applySize = () => {
+    const px = fitFontPx() + 'px';
+    curEl.style.fontSize = px;
+    nextEl.style.fontSize = px;
+  };
+  applySize();
+  window.addEventListener('resize', applySize);
   nextEl.style.opacity = String(settings.previewOpacity);
 
   let flowState: FlowState = 'idle';
@@ -212,6 +230,7 @@ export function createPrompterView(
     controller,
     dispose() {
       window.removeEventListener('keydown', onKey);
+      window.removeEventListener('resize', applySize);
       unsubDiag();
       controller.dispose();
       releaseWakeLock();

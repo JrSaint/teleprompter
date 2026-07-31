@@ -100,19 +100,24 @@ button { font: inherit; color: inherit; background: none; border: none; cursor: 
 #vp-flip.mirror-v { transform: scaleY(-1); }
 #vp-flip.mirror-h.mirror-v { transform: scale(-1, -1); }
 
-#vp-current {
-  position: absolute; left: 0; right: 0; top: 0; bottom: 30%;
-  display: flex; align-items: center; justify-content: center;
+/* One continuous script block: current + next as two adjacent lines
+   of prose — SAME size, tight spacing, emphasis by brightness only.
+   A size drop + spatial gap reads as "title + caption" and made the
+   reader stop at every boundary (B.3.1 root cause). */
+#vp-block {
+  position: absolute; inset: 0;
+  display: flex; flex-direction: column;
+  align-items: center; justify-content: center;
   text-align: center; padding: 0 6vw;
-  font-weight: 700; line-height: 1.25; color: #fff;
+  line-height: 1.25;
+}
+#vp-current {
+  font-weight: 700; color: #fff; white-space: nowrap;
   /* mixed case, heavy sans, max legibility — locked */
 }
 #vp-next {
-  position: absolute; left: 0; right: 0; top: 70%; bottom: 0;
-  display: flex; align-items: flex-start; justify-content: center;
-  text-align: center; padding: 0 8vw;
-  font-weight: 600; line-height: 1.3;
-  color: #fff; /* opacity set from the previewOpacity setting */
+  font-weight: 600; color: #fff; white-space: nowrap;
+  /* one weight step down; opacity from the previewOpacity setting */
 }
 #vp-done {
   position: absolute; inset: 0; display: flex; align-items: center;

@@ -18,6 +18,7 @@ export interface SetupCallbacks {
 }
 
 const CHECKLIST = [
+  'It reads like two lines of a script — speak straight through from the bright line into the dim one at your own pace',
   'iPad brightness at maximum',
   'Auto-Lock off (Settings › Display & Brightness)',
   'Rig hood zipped, glass clean, camera centered',
