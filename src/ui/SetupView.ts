@@ -163,10 +163,17 @@ export function createSetupView(
         <input type="checkbox" id="set-diag" ${settings.diagOverlay ? 'checked' : ''}></label>
       <label class="su-row"><span>Swap timing</span>
         <select id="set-swap">
-          <option value="lead" ${settings.swapTiming === 'lead' ? 'selected' : ''}>Lead (early swap)</option>
-          <option value="confirm" ${settings.swapTiming === 'confirm' ? 'selected' : ''}>Confirm (on completion)</option>
-          <option value="flow" ${settings.swapTiming === 'flow' ? 'selected' : ''}>Flow (predicts from your pace — experimental)</option>
+          <option value="lead" ${settings.swapTiming === 'lead' ? 'selected' : ''}>Lead</option>
+          <option value="confirm" ${settings.swapTiming === 'confirm' ? 'selected' : ''}>Confirm</option>
+          <option value="flow" ${settings.swapTiming === 'flow' ? 'selected' : ''}>Flow (experimental)</option>
         </select></label>
+      <div class="su-engine-hint">${
+        settings.swapTiming === 'flow'
+          ? 'Flow predicts from your reading pace and swaps on your rhythm — experimental.'
+          : settings.swapTiming === 'confirm'
+            ? 'Confirm swaps when the phrase completes.'
+            : 'Lead swaps early, just before the last word.'
+      }</div>
       <label class="su-row"><span>Preview brightness <b>${Math.round(settings.previewOpacity * 100)}%</b></span>
         <input type="range" id="set-preview" min="30" max="80" step="5" value="${Math.round(settings.previewOpacity * 100)}"></label>
       <label class="su-row"><span>Speech engine</span>
@@ -204,6 +211,7 @@ export function createSetupView(
     (card.querySelector('#set-swap') as HTMLSelectElement).onchange = (e) => {
       settings.swapTiming = (e.target as HTMLSelectElement).value as 'lead' | 'confirm' | 'flow';
       void persistSettings();
+      renderSettingsCard();
     };
     (card.querySelector('#set-preview') as HTMLInputElement).oninput = (e) => {
       settings.previewOpacity = parseInt((e.target as HTMLInputElement).value, 10) / 100;
