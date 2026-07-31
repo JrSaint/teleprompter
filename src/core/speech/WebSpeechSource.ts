@@ -3,19 +3,23 @@ import { diag } from '../diag';
 import { normalizeWord } from '../text';
 
 /**
- * Words newly appended to a session transcript. The comparison is
- * normalized so an interim revision that merely changes casing or
+ * Length of the stable (unchanged) prefix between two transcripts.
+ * Normalized so an interim revision that merely changes casing or
  * punctuation ("big" → "Big,") doesn't re-emit the whole tail.
- * Exported for unit tests.
  */
-export function appendedWords(prev: string[], full: string[]): string[] {
+export function stablePrefixLength(prev: string[], full: string[]): number {
   let i = 0;
   while (
     i < full.length &&
     i < prev.length &&
     normalizeWord(full[i]) === normalizeWord(prev[i])
   ) i++;
-  return full.slice(i);
+  return i;
+}
+
+/** Words newly appended to a session transcript. Exported for tests. */
+export function appendedWords(prev: string[], full: string[]): string[] {
+  return full.slice(stablePrefixLength(prev, full));
 }
 
 /* Minimal ambient typings for webkitSpeechRecognition (not in lib.dom). */
@@ -61,7 +65,8 @@ export class WebSpeechSource implements SpeechSource {
   private endedAt = 0;             // performance.now() at unexpected end
   private restartTimer: ReturnType<typeof setTimeout> | null = null;
 
-  start(locale: string): void {
+  start(locale: string, _vocabulary?: string[]): void {
+    // vocabulary priming is a native-engine capability; ignored here
     const Ctor = window.SpeechRecognition ?? window.webkitSpeechRecognition;
     if (!Ctor) {
       this.onStatus?.('unavailable', 'SpeechRecognition API not present');

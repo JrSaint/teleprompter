@@ -31,6 +31,11 @@ The screen stayed with you the whole way through. Check the numbers in the corne
     title: 'Teste do rig — Português (60s)',
     lang: 'pt-BR',
     updated: 0,
+    // Demo of the aliases feature. Note: Siri's mangling is
+    // NONDETERMINISTIC (rig logs show Peter/pro one run, professor/Pou
+    // the next), so alias lists are a manual patch that trails reality;
+    // the durable fix is native vocabulary priming (Phase B.2).
+    aliases: 'prompter: peter, pro, pt, professor, pou',
     body: `Este é o teste de sessenta segundos. Leia cada linha no seu ritmo normal, e as palavras vão seguir você.
 
 Cada frase aparece grande no centro, com a próxima esperando embaixo. Nada fica rolando nesta tela. Ela só avança quando você fala.

@@ -166,7 +166,17 @@ export function createSetupView(
           <option value="confirm" ${settings.swapTiming === 'confirm' ? 'selected' : ''}>Confirm (on completion)</option>
         </select></label>
       <label class="su-row"><span>Preview brightness <b>${Math.round(settings.previewOpacity * 100)}%</b></span>
-        <input type="range" id="set-preview" min="30" max="80" step="5" value="${Math.round(settings.previewOpacity * 100)}"></label>`;
+        <input type="range" id="set-preview" min="30" max="80" step="5" value="${Math.round(settings.previewOpacity * 100)}"></label>
+      <label class="su-row"><span>Speech engine</span>
+        <select id="set-engine">
+          <option value="web" ${settings.engine === 'web' ? 'selected' : ''}>Web (Safari)</option>
+          <option value="native" ${settings.engine === 'native' ? 'selected' : ''}>Native (iPad app)</option>
+        </select></label>
+      <div class="su-engine-hint" id="engine-hint">${
+        settings.engine === 'native'
+          ? 'Native recognition runs entirely on this iPad — audio never leaves the device. Requires the installed app.'
+          : 'Web recognition may route audio through Apple’s servers.'
+      }</div>`;
     (card.querySelector('#set-dist') as HTMLInputElement).oninput = (e) => {
       settings.distanceFt = parseFloat((e.target as HTMLInputElement).value);
       void persistSettings();
@@ -198,6 +208,11 @@ export function createSetupView(
       void persistSettings();
       renderSettingsCard();
     };
+    (card.querySelector('#set-engine') as HTMLSelectElement).onchange = (e) => {
+      settings.engine = (e.target as HTMLSelectElement).value as 'web' | 'native';
+      void persistSettings();
+      renderSettingsCard();
+    };
   }
 
   function renderEditor(s: Script): void {
@@ -220,7 +235,8 @@ export function createSetupView(
         <span id="ed-count" class="ed-hint"></span>
       </div>
       <textarea id="ed-aliases" rows="2" spellcheck="false"
-        placeholder="Aliases (what the recognizer says → script word), one per line — e.g.  prompter: peter, pro, pt"></textarea>
+        title="Aliases are a manual patch: the recognizer's mangling varies run to run, so a list can trail reality. The durable fix is the native engine's vocabulary priming."
+        placeholder="Aliases (what the recognizer says → script word), one per line — e.g.  prompter: peter, pro, pt.  Manual patch only: mangling varies per run; native vocabulary priming is the durable fix."></textarea>
       <textarea id="ed-body" placeholder="Paste or type the script… Use / to force a phrase break." spellcheck="false"></textarea>`;
 
     const title = el.querySelector('#ed-title') as HTMLInputElement;

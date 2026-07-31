@@ -8,6 +8,9 @@ export interface DiagSnapshot {
   restartCount: number;
   restartGaps: number[];      // ms, most recent last
   advanceLatencies: number[]; // ms from result-event receipt to painted swap
+  /** ms from the triggering word's AUDIO time to the painted swap —
+      only the native engine can provide this (word timestamps). */
+  speechToSwap: number[];
   log: string[];              // recent human-readable events
 }
 
@@ -20,6 +23,7 @@ class Diagnostics {
     restartCount: 0,
     restartGaps: [],
     advanceLatencies: [],
+    speechToSwap: [],
     log: [],
   };
   private listeners = new Set<Listener>();
@@ -39,6 +43,7 @@ class Diagnostics {
       restartCount: this.state.restartCount,
       restartGaps: [...this.state.restartGaps],
       advanceLatencies: [...this.state.advanceLatencies],
+      speechToSwap: [...this.state.speechToSwap],
       log: [...this.state.log],
     };
   }
@@ -65,8 +70,14 @@ class Diagnostics {
     this.push();
   }
 
+  speechToSwap(ms: number): void {
+    this.state.speechToSwap.push(Math.round(ms));
+    if (this.state.speechToSwap.length > MAX_KEPT) this.state.speechToSwap.shift();
+    this.push();
+  }
+
   reset(): void {
-    this.state = { restartCount: 0, restartGaps: [], advanceLatencies: [], log: [] };
+    this.state = { restartCount: 0, restartGaps: [], advanceLatencies: [], speechToSwap: [], log: [] };
     this.push();
   }
 }

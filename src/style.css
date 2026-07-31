@@ -85,6 +85,9 @@ button { font: inherit; color: inherit; background: none; border: none; cursor: 
   flex: 1; background: #000; color: #f2f2f7; border: none; outline: none;
   resize: none; padding: 24px; font-size: 18px; line-height: 1.6; font-family: inherit;
 }
+.su-engine-hint {
+  color: #8e8e93; font-size: 12px; line-height: 1.5; padding: 2px 0 8px;
+}
 .su-row select {
   background: #2c2c2e; color: #f2f2f7; border: none; border-radius: 8px;
   padding: 8px 10px; font-size: 14px;

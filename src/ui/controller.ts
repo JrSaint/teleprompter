@@ -40,6 +40,7 @@ export class PrompterController {
 
   private matcher: PhraseMatcher;
   private phrases: Phrase[];
+  private vocabulary: string[] = [];
   private speech: SpeechSource;
   private ev: ControllerEvents;
   private locale: string;
@@ -62,10 +63,19 @@ export class PrompterController {
     opts: { leadMode?: boolean } = {},
   ) {
     this.phrases = phrases;
+    const aliasMap = parseAliases(script.aliases);
     this.matcher = new PhraseMatcher(phrases, {
       leadMode: opts.leadMode ?? false,
-      aliases: parseAliases(script.aliases),
+      aliases: aliasMap,
     });
+    // Vocabulary priming for engines that support it: the script's
+    // unique content words plus alias targets.
+    this.vocabulary = [
+      ...new Set([
+        ...phrases.flatMap((p) => p.contentIdx.map((i) => p.tokens[i])),
+        ...new Set(aliasMap.values()),
+      ]),
+    ].slice(0, 120);
     this.speech = speech;
     this.locale = script.lang;
     this.ev = ev;
@@ -95,11 +105,11 @@ export class PrompterController {
         this.stopMic();
       }
     };
-    speech.onWords = (words, isFinal) => this.consume(words, isFinal);
+    speech.onWords = (words, isFinal, meta) => this.consume(words, isFinal, meta);
   }
 
   /** Feed recognized (or simulated) words through the matcher. */
-  consume(words: string[], isFinal = true): void {
+  consume(words: string[], isFinal = true, meta?: import('../core/speech/SpeechSource').WordsMeta): void {
     if (this.flow.state === 'idle' || this.flow.state === 'finished') return;
     for (const w of words) this.recorder.token(w, isFinal);
 
@@ -140,9 +150,19 @@ export class PrompterController {
 
     if (res.events.length > 0) {
       this.pushSteps(res.events, res.finished);
-      // measure event-receipt → first painted swap (double rAF = after paint)
+      // measure event-receipt → first painted swap (double rAF = after
+      // paint), and — when the engine provides word audio timestamps —
+      // the true speech-to-swap: triggering word's audio time vs paint.
+      const spokenWall =
+        meta?.audioEndMs?.length && meta.audioAnchorMs !== undefined
+          ? meta.audioAnchorMs + meta.audioEndMs[meta.audioEndMs.length - 1]
+          : null;
       requestAnimationFrame(() =>
-        requestAnimationFrame(() => diag.advanceLatency(performance.now() - t0)),
+        requestAnimationFrame(() => {
+          const paint = performance.now();
+          diag.advanceLatency(paint - t0);
+          if (spokenWall !== null) diag.speechToSwap(paint - spokenWall);
+        }),
       );
     }
 
@@ -245,7 +265,7 @@ export class PrompterController {
   arm(): void {
     if (this.flow.state === 'finished') this.restart();
     this.flow.to('armed');
-    this.speech.start(this.locale);
+    this.speech.start(this.locale, this.vocabulary);
     this.bumpHoldTimer();
   }
 

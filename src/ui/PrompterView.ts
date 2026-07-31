@@ -2,6 +2,7 @@ import type { Script, Settings } from '../store/db';
 import { segmentScript } from '../core/segmenter';
 import { PrompterController } from './controller';
 import { WebSpeechSource } from '../core/speech/WebSpeechSource';
+import { NativeSpeechSource } from '../core/speech/NativeSpeechSource';
 import { renderPhrase } from './render';
 import { fontPxForDistance } from './typography';
 import { holdWakeLock, releaseWakeLock } from './wakelock';
@@ -87,6 +88,11 @@ export function createPrompterView(
       `advance ms: last ${last ?? '—'} · med ${lat.length ? median(lat) : '—'} (n=${lat.length})`,
       `state: ${flowState}`,
     ];
+    if (d.speechToSwap.length > 0) {
+      const s2s = d.speechToSwap;
+      lines.splice(3, 0,
+        `speech→swap ms: last ${s2s[s2s.length - 1]} · med ${median(s2s)} (n=${s2s.length})`);
+    }
     for (const line of lines) {
       const div = document.createElement('div');
       div.textContent = line;
@@ -94,7 +100,10 @@ export function createPrompterView(
     }
   };
 
-  const speech = new WebSpeechSource();
+  // Engine per setting; NativeSpeechSource reports 'unavailable' when
+  // chosen outside the installed app, which the status strip shows.
+  const speech =
+    settings.engine === 'native' ? new NativeSpeechSource() : new WebSpeechSource();
   const controller = new PrompterController(script, phrases, speech, {
     onPhrase: (cur, nxt, i) => {
       phraseIndex = i;

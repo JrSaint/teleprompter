@@ -23,6 +23,8 @@ export interface Settings {
   swapTiming: 'lead' | 'confirm';
   /** Next-phrase preview opacity (eye-voice span legibility). */
   previewOpacity: number;
+  /** Speech engine: web (Safari API) or native (iPad app, on-device). */
+  engine: 'web' | 'native';
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -34,6 +36,7 @@ export const DEFAULT_SETTINGS: Settings = {
   voiceStart: true,
   swapTiming: 'lead',
   previewOpacity: 0.6,
+  engine: 'web',
 };
 
 const db = localforage.createInstance({ name: 'voice-prompter' });
@@ -74,10 +77,10 @@ export async function loadSessionLogs(): Promise<unknown[]> {
  * touched; re-running is a no-op thanks to the flag).
  */
 export async function seedRigScripts(seeds: Script[]): Promise<void> {
-  // v2: upserts by id so wording fixes reach devices seeded with v1
-  // (the two rig-test scripts are fixtures; local edits to them are
-  // intentionally replaced).
-  const FLAG = 'seeded_rigtest_v2';
+  // v3: adds the alias demo line to the PT script. Upserts by id so
+  // updates reach devices seeded earlier (the two rig-test scripts are
+  // fixtures; local edits to them are intentionally replaced).
+  const FLAG = 'seeded_rigtest_v3';
   if (await db.getItem(FLAG)) return;
   const scripts = await loadScripts();
   for (const seed of seeds) {
