@@ -8,18 +8,21 @@ import UIKit
  * On-device speech for the voice prompter.
  *
  * Engine selection at runtime:
- *  - iPadOS 26+: SpeechAnalyzer/SpeechTranscriber (word-level audio
- *    time ranges) — see NativeSpeechAnalyzer.swift.
+ *  - iPadOS 26+ on capable hardware: SpeechAnalyzer/SpeechTranscriber
+ *    (word-level audio time ranges) — see NativeSpeechAnalyzer.swift.
+ *    Unsupported hardware skips it cleanly with one env note.
  *  - Otherwise/fallback: SFSpeechRecognizer with
  *    requiresOnDeviceRecognition and contextualStrings vocabulary.
  *
- * Hardening (B.2 bugfix sprint):
- *  - start/stop are idempotent — a second start while active is a no-op
- *  - "listening" is emitted only after the audio tap delivers its first
- *    buffer; a ~1Hz RMS level event proves audio is flowing
- *  - every failure emits a status event with detail — nothing dies
- *    silently in the Xcode console
- *  - an "env" event reports device/OS/engine/locale state at start
+ * B.2 silence sprint:
+ *  - start/stop serialized through a state queue — a duplicate start is
+ *    a labeled no-op event, provably not a second engine
+ *  - AVAudioSession uses .playAndRecord/.default (a bare .record with
+ *    .measurement can yield zero-filled buffers alongside the WKWebView
+ *    audio session — the recorded flatline)
+ *  - env reports record permission, session category/mode/sample rate,
+ *    input availability, and a resolvedSupported flag with FULL locale
+ *    lists — the target locale's status is never hidden by truncation
  */
 @objc(NativeSpeechPlugin)
 public class NativeSpeechPlugin: CAPPlugin, CAPBridgedPlugin {
@@ -33,44 +36,54 @@ public class NativeSpeechPlugin: CAPPlugin, CAPBridgedPlugin {
     private let audioEngine = AVAudioEngine()
     private var request: SFSpeechAudioBufferRecognitionRequest?
     private var task: SFSpeechRecognitionTask?
-    private var active = false
     private var localeId = "en-US"
     private var vocabulary: [String] = []
     private var sessionStartEpochMs: Double = 0
     private var endedAtEpochMs: Double = 0
     private var analyzerBox: AnyObject?
 
-    // tap-confirmed listening + level metering
+    // start/stop serialization — the only writers of `active`
+    private let stateQueue = DispatchQueue(label: "nativespeech.state")
+    private var active = false
+    private var startSeq = 0
+
+    // tap-confirmed listening + level metering (audio-thread touched,
+    // lock-guarded)
+    private let meterLock = NSLock()
     private var pendingListeningDetail: String?
     private var lastLevelEmitMs: Double = 0
 
     @objc func start(_ call: CAPPluginCall) {
-        // idempotent: a second start while active is a no-op
-        if active {
-            emitStatus("starting", detail: "already active — start ignored")
+        let (isDuplicate, seq): (Bool, Int) = stateQueue.sync {
+            if active { return (true, startSeq) }
+            active = true
+            startSeq += 1
+            return (false, startSeq)
+        }
+        if isDuplicate {
+            emitStatus("starting", detail: "duplicate-start-ignored (seq \(seq))")
             call.resolve()
             return
         }
-        active = true
         localeId = call.getString("locale") ?? "en-US"
         vocabulary = call.getArray("vocabulary", String.self) ?? []
         SFSpeechRecognizer.requestAuthorization { [weak self] auth in
             guard let self = self else { return }
             guard auth == .authorized else {
-                self.active = false
+                self.setInactive()
                 self.emitStatus("denied", detail: "speech recognition not authorized")
                 call.resolve()
                 return
             }
             AVAudioSession.sharedInstance().requestRecordPermission { granted in
                 guard granted else {
-                    self.active = false
-                    self.emitStatus("denied", detail: "microphone not authorized")
+                    self.setInactive()
+                    self.emitStatus("denied", detail: "Microphone access is off for Voice Prompter. Enable it in Settings → Privacy → Microphone.")
                     call.resolve()
                     return
                 }
                 DispatchQueue.main.async {
-                    self.begin()
+                    self.begin(seq: seq)
                     call.resolve()
                 }
             }
@@ -82,22 +95,63 @@ public class NativeSpeechPlugin: CAPPlugin, CAPBridgedPlugin {
         call.resolve()
     }
 
-    private func begin() {
-        emitStatus("starting")
+    private func setInactive() {
+        stateQueue.sync { active = false }
+    }
+
+    var isActive: Bool { stateQueue.sync { active } }
+
+    private func begin(seq: Int) {
+        emitStatus("starting", detail: "plugin (seq \(seq))")
         if #available(iOS 26.0, *) {
-            let analyzer = NativeSpeechAnalyzer(plugin: self, localeId: localeId)
-            analyzerBox = analyzer
-            analyzer.start { [weak self] ok in
-                guard let self = self, self.active else { return }
-                if !ok {
+            Task { @MainActor in
+                let analyzer = NativeSpeechAnalyzer(plugin: self, localeId: self.localeId)
+                self.analyzerBox = analyzer
+                do {
+                    try await analyzer.start()
+                } catch is AnalyzerUnsupported {
+                    // clean skip — one env note, no error spam
+                    guard self.isActive else { return }
                     self.analyzerBox = nil
-                    self.emitStatus("restarting", detail: "analyzer unavailable, falling back")
-                    DispatchQueue.main.async { self.startRecognizer() }
+                    self.startRecognizer()
+                } catch {
+                    guard self.isActive else { return }
+                    self.analyzerBox = nil
+                    self.emitStatus("error", detail: "analyzer: \(error.localizedDescription)")
+                    self.startRecognizer()
                 }
             }
         } else {
             startRecognizer()
         }
+    }
+
+    // MARK: - shared audio session (record-capable + WebView-friendly)
+
+    func configureAudioSession() throws -> AVAudioSession {
+        let session = AVAudioSession.sharedInstance()
+        try session.setCategory(.playAndRecord, mode: .default,
+                                options: [.defaultToSpeaker, .allowBluetooth, .duckOthers])
+        try session.setActive(true, options: .notifyOthersOnDeactivation)
+        return session
+    }
+
+    func sessionEnvFields() -> [String: Any] {
+        let session = AVAudioSession.sharedInstance()
+        let permission: String
+        switch session.recordPermission {
+        case .granted: permission = "granted"
+        case .denied: permission = "denied"
+        case .undetermined: permission = "undetermined"
+        @unknown default: permission = "unknown"
+        }
+        return [
+            "recordPermission": permission,
+            "sessionCategory": session.category.rawValue,
+            "sessionMode": session.mode.rawValue,
+            "sessionSampleRate": session.sampleRate,
+            "isInputAvailable": session.isInputAvailable,
+        ]
     }
 
     // MARK: - SFSpeechRecognizer path (on-device required)
@@ -111,25 +165,29 @@ public class NativeSpeechPlugin: CAPPlugin, CAPBridgedPlugin {
             emitStatus("unavailable", detail: "recognizer for \(localeId) is not available right now")
             return
         }
+        do {
+            _ = try configureAudioSession()
+        } catch {
+            emitStatus("error", detail: "audio session failed: \(error.localizedDescription)")
+            return
+        }
+        let supported = SFSpeechRecognizer.supportedLocales().map { $0.identifier }.sorted()
+        let resolvedSupported = supported.contains(recognizer.locale.identifier)
+        var env: [String: Any] = [
+            "engine": "recognizer",
+            "locale": recognizer.locale.identifier,
+            "resolvedSupported": resolvedSupported,
+            "onDevice": recognizer.supportsOnDeviceRecognition,
+            "supported": supported,
+            "installed": [],
+        ]
+        env.merge(sessionEnvFields()) { a, _ in a }
+        emitEnv(env)
         // On-device policy: check BEFORE forcing it; never silently
         // listen to nothing, never fall back to server-side here.
-        let supported = SFSpeechRecognizer.supportedLocales().map { $0.identifier }.sorted()
-        emitEnv(engine: "recognizer",
-                resolvedLocale: recognizer.locale.identifier,
-                onDevice: recognizer.supportsOnDeviceRecognition,
-                supported: Array(supported.prefix(40)),
-                installed: [])
         guard recognizer.supportsOnDeviceRecognition else {
             emitStatus("unavailable",
                        detail: "This iPad cannot run \(localeId) speech recognition on-device. The native engine never sends audio to servers, so it cannot continue. Use the Web engine for this script.")
-            return
-        }
-        do {
-            let session = AVAudioSession.sharedInstance()
-            try session.setCategory(.record, mode: .measurement, options: .duckOthers)
-            try session.setActive(true, options: .notifyOthersOnDeactivation)
-        } catch {
-            emitStatus("error", detail: "audio session failed: \(error.localizedDescription)")
             return
         }
         let input = audioEngine.inputNode
@@ -138,7 +196,7 @@ public class NativeSpeechPlugin: CAPPlugin, CAPBridgedPlugin {
             emitStatus("error", detail: "microphone reports an invalid audio format (\(format.sampleRate) Hz)")
             return
         }
-        pendingListeningDetail = "recognizer"
+        armListeningConfirmation(detail: "recognizer")
         input.removeTap(onBus: 0)
         input.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak self] buffer, _ in
             guard let self = self else { return }
@@ -170,12 +228,15 @@ public class NativeSpeechPlugin: CAPPlugin, CAPBridgedPlugin {
         sessionStartEpochMs = Date().timeIntervalSince1970 * 1000
 
         task = recognizer.recognitionTask(with: req) { [weak self] result, error in
-            guard let self = self, self.active else { return }
+            guard let self = self, self.isActive else { return }
             if let result = result {
                 var words: [String] = []
                 var ends: [Double] = []
                 for seg in result.bestTranscription.segments {
                     words.append(seg.substring)
+                    // NOTE: partial results may report 0 timestamps until
+                    // finalization — the JS side skips the speech-to-swap
+                    // metric for zero audio times.
                     ends.append((seg.timestamp + seg.duration) * 1000)
                 }
                 self.emitWords(words, ends: ends, isFinal: result.isFinal, engine: "recognizer")
@@ -187,33 +248,55 @@ public class NativeSpeechPlugin: CAPPlugin, CAPBridgedPlugin {
                 self.endedAtEpochMs = Date().timeIntervalSince1970 * 1000
                 self.emitStatus("restarting")
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-                    if self.active { self.spawnRecognitionTask(recognizer) }
+                    if self.isActive { self.spawnRecognitionTask(recognizer) }
                 }
             }
         }
     }
 
-    // MARK: - tap-confirmed listening + audio level (both engines)
+    // MARK: - tap-confirmed listening + audio level
 
     func armListeningConfirmation(detail: String) {
+        meterLock.lock()
         pendingListeningDetail = detail
+        meterLock.unlock()
     }
 
+    /// Called from the audio thread (recognizer tap). Thread-safe.
     func onTapBuffer(_ buffer: AVAudioPCMBuffer) {
+        let rms = Self.rms(of: buffer)
+        reportLevel(rms: rms)
+    }
+
+    /// Thread-safe level/listening reporting shared by both engines.
+    func reportLevel(rms: Float) {
+        var announce: String?
+        var emitLevel: Int?
+        let now = Date().timeIntervalSince1970 * 1000
+        meterLock.lock()
         if let detail = pendingListeningDetail {
             pendingListeningDetail = nil
-            DispatchQueue.main.async { self.emitStatus("listening", detail: detail) }
+            announce = detail
         }
-        let now = Date().timeIntervalSince1970 * 1000
-        guard now - lastLevelEmitMs >= 1000 else { return }
-        lastLevelEmitMs = now
-        guard let data = buffer.floatChannelData?[0], buffer.frameLength > 0 else { return }
+        if now - lastLevelEmitMs >= 1000 {
+            lastLevelEmitMs = now
+            emitLevel = min(100, Int(rms * 300))
+        }
+        meterLock.unlock()
+        if let announce = announce {
+            DispatchQueue.main.async { self.emitStatus("listening", detail: announce) }
+        }
+        if let level = emitLevel {
+            DispatchQueue.main.async { self.emitStatus("level", detail: String(level)) }
+        }
+    }
+
+    static func rms(of buffer: AVAudioPCMBuffer) -> Float {
+        guard let data = buffer.floatChannelData?[0], buffer.frameLength > 0 else { return 0 }
         var sum: Float = 0
         let n = Int(buffer.frameLength)
         for i in 0..<n { sum += data[i] * data[i] }
-        let rms = sqrtf(sum / Float(n))
-        let level = min(100, Int(rms * 300))
-        DispatchQueue.main.async { self.emitStatus("level", detail: String(level)) }
+        return sqrtf(sum / Float(n))
     }
 
     // MARK: - shared emission (also used by the analyzer engine)
@@ -234,17 +317,10 @@ public class NativeSpeechPlugin: CAPPlugin, CAPBridgedPlugin {
         notifyListeners("status", data: data)
     }
 
-    func emitEnv(engine: String, resolvedLocale: String, onDevice: Bool,
-                 supported: [String], installed: [String]) {
-        let dict: [String: Any] = [
-            "model": Self.deviceModelIdentifier(),
-            "os": UIDevice.current.systemVersion,
-            "engine": engine,
-            "onDevice": onDevice,
-            "locale": resolvedLocale,
-            "supported": supported,
-            "installed": installed,
-        ]
+    func emitEnv(_ fields: [String: Any]) {
+        var dict = fields
+        dict["model"] = Self.deviceModelIdentifier()
+        dict["os"] = UIDevice.current.systemVersion
         if let data = try? JSONSerialization.data(withJSONObject: dict),
            let json = String(data: data, encoding: .utf8) {
             emitStatus("env", detail: json)
@@ -255,7 +331,6 @@ public class NativeSpeechPlugin: CAPPlugin, CAPBridgedPlugin {
         sessionStartEpochMs = epochMs
     }
 
-    var isActive: Bool { active }
     var currentVocabulary: [String] { vocabulary }
 
     static func deviceModelIdentifier() -> String {
@@ -268,13 +343,17 @@ public class NativeSpeechPlugin: CAPPlugin, CAPBridgedPlugin {
     }
 
     private func stopAll() {
-        active = false
+        stateQueue.sync { active = false }
+        meterLock.lock()
         pendingListeningDetail = nil
+        meterLock.unlock()
         task?.cancel()
         task = nil
         request = nil
         if #available(iOS 26.0, *) {
-            (analyzerBox as? NativeSpeechAnalyzer)?.stop()
+            if let analyzer = analyzerBox as? NativeSpeechAnalyzer {
+                Task { @MainActor in analyzer.stop() }
+            }
         }
         analyzerBox = nil
         audioEngine.inputNode.removeTap(onBus: 0)
@@ -282,4 +361,10 @@ public class NativeSpeechPlugin: CAPPlugin, CAPBridgedPlugin {
         try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
         emitStatus("stopped")
     }
+}
+
+/// Thrown by the analyzer when the hardware/locale cannot run
+/// SpeechTranscriber at all — the caller falls back without error spam.
+struct AnalyzerUnsupported: Error {
+    let note: String
 }

@@ -53,7 +53,9 @@ export class NativeSpeechSource implements SpeechSource {
     }
     this.active = true;
     this.emitted = [];
-    this.onStatus?.('starting');
+    // labeled so tapes can distinguish the JS-layer announcement from
+    // the plugin's own start (they are two events, not two starts)
+    this.onStatus?.('starting', 'js');
     void this.attach();
     NativeSpeech.start({ locale, vocabulary }).catch((err) => {
       diag.event(`native speech start failed: ${String(err)}`);

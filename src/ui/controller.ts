@@ -172,9 +172,13 @@ export class PrompterController {
       // measure event-receipt → first painted swap (double rAF = after
       // paint), and — when the engine provides word audio timestamps —
       // the true speech-to-swap: triggering word's audio time vs paint.
+      // SFSpeechRecognizer partial results can carry zero timestamps
+      // until finalization — a 0 audio time would poison the metric
+      const lastAudioEnd =
+        meta?.audioEndMs?.length ? meta.audioEndMs[meta.audioEndMs.length - 1] : 0;
       const spokenWall =
-        meta?.audioEndMs?.length && meta.audioAnchorMs !== undefined
-          ? meta.audioAnchorMs + meta.audioEndMs[meta.audioEndMs.length - 1]
+        lastAudioEnd > 0 && meta?.audioAnchorMs !== undefined
+          ? meta.audioAnchorMs + lastAudioEnd
           : null;
       requestAnimationFrame(() =>
         requestAnimationFrame(() => {
