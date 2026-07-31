@@ -83,6 +83,11 @@ export class NativeSpeechSource implements SpeechSource {
           diag.restartGap(Number(e.detail));
           return;
         }
+        if (e.status === 'model-progress') {
+          // first-use model download — surfaced in the status strip
+          this.onStatus?.('starting', `Downloading speech model… ${e.detail}%`);
+          return;
+        }
         this.onStatus?.(e.status as SpeechStatus, e.detail);
       }),
     );

@@ -80,7 +80,9 @@ export class PrompterController {
     this.locale = script.lang;
     this.ev = ev;
 
-    this.recorder.start(script);
+    this.recorder.start(script, {
+      swapTiming: opts.leadMode ? 'lead' : 'confirm',
+    });
     this.saveTimer = setInterval(() => this.persistLog(), AUTOSAVE_MS);
 
     this.flow.onChange = (s) => {
@@ -91,6 +93,19 @@ export class PrompterController {
     };
 
     speech.onStatus = (s, detail) => {
+      // side-channel events from the native engine: environment report
+      // and ~1Hz audio level — recorded and shown, never treated as a
+      // mic-state change
+      if (s === 'env') {
+        this.recorder.mic('env', detail);
+        diag.setEnv(detail ?? '');
+        return;
+      }
+      if (s === 'level') {
+        this.recorder.mic('level', detail);
+        diag.setLevel(Number(detail));
+        return;
+      }
       this.micStatus = s;
       this.recorder.mic(s, detail);
       // grace window opens when a restart completes
@@ -125,12 +140,16 @@ export class PrompterController {
     });
 
     if (res.events.length > 0) {
+      // multi-decision batches: each event's `from` is the previous
+      // event's landing point, not the pre-batch position
+      let prevAt = from;
       for (const e of res.events) {
         this.recorder.decision({
-          action: e.type, rule: e.rule, from, to: e.to,
+          action: e.type, rule: e.rule, from: prevAt, to: e.to,
           curPct: pre.pct, ahead: pre.ahead, evidence: e.evidence,
         });
         diag.event(`${e.type} (${e.rule}, ev ${e.evidence}) → phrase ${e.to + 1}`);
+        prevAt = e.to;
       }
       this.healed = false;
     } else if (res.matchedAny) {

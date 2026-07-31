@@ -27,9 +27,10 @@ export function replaySession(
   cfg: Partial<MatcherConfig> = {},
 ): ReplayResult {
   const phrases = segmentScript(log.script.body, log.script.lang);
-  // the script's own aliases apply unless the caller overrides them
+  // the session's own aliases and swap timing apply unless overridden
   const m = new PhraseMatcher(phrases, {
     aliases: parseAliases(log.script.aliases),
+    ...(log.swapTiming ? { leadMode: log.swapTiming === 'lead' } : {}),
     ...cfg,
   });
   const moves: ReplayResult['moves'] = [];

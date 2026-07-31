@@ -33,6 +33,9 @@ export interface SessionLog {
   id: string;
   startedAtIso: string;
   script: { title: string; lang: Lang; body: string; aliases?: string };
+  /** Swap timing the session ran with — replay honors it. Absent in
+      logs recorded before B.2; replay then tries both modes. */
+  swapTiming?: 'lead' | 'confirm';
   events: SessionEvent[];
 }
 
@@ -40,13 +43,17 @@ export class FlightRecorder {
   private log: SessionLog | null = null;
   private t0 = 0;
 
-  start(script: { title: string; lang: Lang; body: string; aliases?: string }): void {
+  start(
+    script: { title: string; lang: Lang; body: string; aliases?: string },
+    opts: { swapTiming?: 'lead' | 'confirm' } = {},
+  ): void {
     this.t0 = performance.now();
     this.log = {
       version: 1,
       id: crypto.randomUUID ? crypto.randomUUID() : String(Date.now()),
       startedAtIso: new Date().toISOString(),
       script,
+      ...(opts.swapTiming ? { swapTiming: opts.swapTiming } : {}),
       events: [],
     };
   }

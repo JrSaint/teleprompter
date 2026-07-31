@@ -13,7 +13,11 @@ export type SpeechStatus =
   | 'stopped'
   | 'denied'
   | 'unavailable'
-  | 'error';
+  | 'error'
+  // side-channel events (native engine): environment report at session
+  // start; ~1Hz microphone level while active. Not mic-state changes.
+  | 'env'
+  | 'level';
 
 /** Extra per-batch data from engines that can provide it (native). */
 export interface WordsMeta {

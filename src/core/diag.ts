@@ -11,6 +11,10 @@ export interface DiagSnapshot {
   /** ms from the triggering word's AUDIO time to the painted swap —
       only the native engine can provide this (word timestamps). */
   speechToSwap: number[];
+  /** native engine environment report (device/engine/locales) */
+  env: string;
+  /** last reported mic input level, 0–100 (native engine, ~1Hz) */
+  level: number;
   log: string[];              // recent human-readable events
 }
 
@@ -24,6 +28,8 @@ class Diagnostics {
     restartGaps: [],
     advanceLatencies: [],
     speechToSwap: [],
+    env: '',
+    level: -1,
     log: [],
   };
   private listeners = new Set<Listener>();
@@ -44,8 +50,20 @@ class Diagnostics {
       restartGaps: [...this.state.restartGaps],
       advanceLatencies: [...this.state.advanceLatencies],
       speechToSwap: [...this.state.speechToSwap],
+      env: this.state.env,
+      level: this.state.level,
       log: [...this.state.log],
     };
+  }
+
+  setEnv(env: string): void {
+    this.state.env = env;
+    this.event(`env: ${env.slice(0, 160)}`);
+  }
+
+  setLevel(level: number): void {
+    this.state.level = Number.isFinite(level) ? level : -1;
+    this.push();
   }
 
   event(message: string): void {
@@ -77,7 +95,10 @@ class Diagnostics {
   }
 
   reset(): void {
-    this.state = { restartCount: 0, restartGaps: [], advanceLatencies: [], speechToSwap: [], log: [] };
+    this.state = {
+      restartCount: 0, restartGaps: [], advanceLatencies: [],
+      speechToSwap: [], env: '', level: -1, log: [],
+    };
     this.push();
   }
 }

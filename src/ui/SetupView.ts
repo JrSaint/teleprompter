@@ -174,7 +174,7 @@ export function createSetupView(
         </select></label>
       <div class="su-engine-hint" id="engine-hint">${
         settings.engine === 'native'
-          ? 'Native recognition runs entirely on this iPad — audio never leaves the device. Requires the installed app.'
+          ? 'Native recognition runs entirely on this iPad — audio never leaves the device. Requires the installed app. First use of a language downloads its speech model (needs internet once).'
           : 'Web recognition may route audio through Apple’s servers.'
       }</div>`;
     (card.querySelector('#set-dist') as HTMLInputElement).oninput = (e) => {

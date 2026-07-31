@@ -201,7 +201,20 @@ describe.skipIf(realFixtures.length === 0)('real rig fixtures', () => {
       for (const move of r.moves) {
         expect(move.evidence).toBeGreaterThanOrEqual(1);
       }
-      expect(r.finished).toBe(true);
+      const tokenCount = log.events.filter((e) => e.kind === 'token').length;
+      if (tokenCount > 0) {
+        // logs recorded before B.2 don't say which swap timing they ran
+        // with — accept a finish in either mode for those
+        const finished =
+          r.finished ||
+          (log.swapTiming === undefined &&
+            replaySession(log, { leadMode: true }).finished);
+        expect(finished).toBe(true);
+      } else {
+        // failure-capture fixture (e.g. the native zero-output session):
+        // nothing was heard, so nothing may move
+        expect(r.moves).toEqual([]);
+      }
     },
   );
 });

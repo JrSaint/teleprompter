@@ -93,6 +93,11 @@ export function createPrompterView(
       lines.splice(3, 0,
         `speech→swap ms: last ${s2s[s2s.length - 1]} · med ${median(s2s)} (n=${s2s.length})`);
     }
+    if (d.level >= 0) {
+      const bars = Math.round(Math.min(100, d.level) / 10);
+      lines.push(`mic level: ${'▮'.repeat(bars)}${'▯'.repeat(10 - bars)} ${d.level}`);
+    }
+    if (d.env) lines.push(`env: ${d.env.slice(0, 120)}`);
     for (const line of lines) {
       const div = document.createElement('div');
       div.textContent = line;
