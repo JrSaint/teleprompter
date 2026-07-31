@@ -253,11 +253,16 @@ public class NativeSpeechPlugin: CAPPlugin, CAPBridgedPlugin {
                 var words: [String] = []
                 var ends: [Double] = []
                 for seg in result.bestTranscription.segments {
-                    words.append(seg.substring)
                     // NOTE: partial results may report 0 timestamps until
                     // finalization — the JS side skips the speech-to-swap
                     // metric for zero audio times.
-                    ends.append((seg.timestamp + seg.duration) * 1000)
+                    let end = (seg.timestamp + seg.duration) * 1000
+                    // a segment's substring can carry several words
+                    // ("test read") — one entry per word, same end time
+                    for piece in seg.substring.split(whereSeparator: { $0.isWhitespace }) {
+                        words.append(String(piece))
+                        ends.append(end)
+                    }
                 }
                 if !words.isEmpty {
                     self.wordsThisSession = true

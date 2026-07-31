@@ -68,18 +68,36 @@ export class NativeSpeechSource implements SpeechSource {
     this.handles.push(
       await NativeSpeech.addListener('words', (e) => {
         if (!this.active) return;
-        const prefix = stablePrefixLength(this.emitted, e.words);
-        const fresh = e.words.slice(prefix);
-        this.emitted = e.words;
+        // Recognizer segments can carry several words in one substring
+        // ("test read") — split on whitespace, replicating the
+        // segment's audio end per piece, so the matcher only ever sees
+        // real words and the full-transcript diff stays aligned. The
+        // plugin splits too; this guards older builds and the analyzer.
+        const words: string[] = [];
+        const ends: number[] = [];
+        e.words.forEach((w, i) => {
+          for (const piece of w.split(/\s+/)) {
+            if (!piece) continue;
+            words.push(piece);
+            ends.push(e.audioEndMs[i] ?? 0);
+          }
+        });
+        const prefix = stablePrefixLength(this.emitted, words);
+        const fresh = words.slice(prefix);
+        this.emitted = words;
         if (fresh.length === 0) return;
         // audio anchor mapped onto the performance.now() timeline
         const audioAnchorMs = e.sessionStartEpochMs - performance.timeOrigin;
         this.onWords?.(fresh, e.isFinal, {
-          audioEndMs: e.audioEndMs.slice(prefix),
+          audioEndMs: ends.slice(prefix),
           audioAnchorMs,
         });
       }),
       await NativeSpeech.addListener('status', (e) => {
+        // after stop() the JS layer has already announced 'stopped';
+        // the plugin's own trailing 'stopped' (and any late noise)
+        // would double up in the tape
+        if (!this.active) return;
         if (e.status === 'restarting') this.emitted = [];
         if (e.status === 'restart-gap' && e.detail) {
           diag.restartGap(Number(e.detail));

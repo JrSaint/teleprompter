@@ -2,8 +2,8 @@ import type { Phrase } from '../core/segmenter';
 import { PhraseMatcher, type MatchEvent } from '../core/matcher';
 import { Flow, type FlowState } from '../core/flow';
 import type { SpeechSource, SpeechStatus } from '../core/speech/SpeechSource';
-import { diag } from '../core/diag';
-import { FlightRecorder } from '../core/recorder';
+import { diag, median } from '../core/diag';
+import { FlightRecorder, type SessionEvent } from '../core/recorder';
 import { saveSessionLog } from '../store/db';
 import { parseAliases } from '../core/aliases';
 import type { Lang } from '../core/text';
@@ -55,6 +55,10 @@ export class PrompterController {
   private stepQueue: Array<number | 'end'> = [];
   private stepTimer: ReturnType<typeof setTimeout> | null = null;
 
+  /** speech-to-swap samples for the current listening stretch (ms) —
+      summarized into the log when the mic stops */
+  private s2sSamples: number[] = [];
+
   constructor(
     script: { title: string; lang: Lang; body: string; aliases?: string },
     phrases: Phrase[],
@@ -82,6 +86,9 @@ export class PrompterController {
 
     this.recorder.start(script, {
       swapTiming: opts.leadMode ? 'lead' : 'confirm',
+      // index → text; decisions are index-only and unanalyzable
+      // after the fact without the list the session actually used
+      phrases: phrases.map((p) => p.text),
     });
     this.saveTimer = setInterval(() => this.persistLog(), AUTOSAVE_MS);
 
@@ -139,15 +146,16 @@ export class PrompterController {
       grace: performance.now() < this.graceUntil,
     });
 
+    const recorded: Array<SessionEvent | null> = [];
     if (res.events.length > 0) {
       // multi-decision batches: each event's `from` is the previous
       // event's landing point, not the pre-batch position
       let prevAt = from;
       for (const e of res.events) {
-        this.recorder.decision({
+        recorded.push(this.recorder.decision({
           action: e.type, rule: e.rule, from: prevAt, to: e.to,
           curPct: pre.pct, ahead: pre.ahead, evidence: e.evidence,
-        });
+        }));
         diag.event(`${e.type} (${e.rule}, ev ${e.evidence}) → phrase ${e.to + 1}`);
         prevAt = e.to;
       }
@@ -184,7 +192,16 @@ export class PrompterController {
         requestAnimationFrame(() => {
           const paint = performance.now();
           diag.advanceLatency(paint - t0);
-          if (spokenWall !== null) diag.speechToSwap(paint - spokenWall);
+          if (spokenWall !== null) {
+            const ms = Math.round(paint - spokenWall);
+            diag.speechToSwap(ms);
+            this.s2sSamples.push(ms);
+            // patch the metric onto this batch's decision events —
+            // the log is serialized later, so the reference sticks
+            for (const r of recorded) {
+              if (r?.kind === 'decision') r.speechToSwapMs = ms;
+            }
+          }
         }),
       );
     }
@@ -299,6 +316,12 @@ export class PrompterController {
     this.cancelHeal();
     this.speech.stop();
     if (toIdle && this.flow.state !== 'finished') this.flow.to('idle');
+    // one speech-to-swap summary per listening stretch — THE number
+    // this phase exists to produce
+    if (this.s2sSamples.length > 0) {
+      this.recorder.summary(this.s2sSamples.length, median(this.s2sSamples));
+      this.s2sSamples = [];
+    }
     this.persistLog();
   }
 

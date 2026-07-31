@@ -41,6 +41,9 @@ export type MatchRule =
   | 'all-but-one'      // ≥3 content words and all but one matched — no
                        //   single unmatchable word (loanword) vetoes
   | 'boundary-rescue'  // ≥rescuePct matched AND next phrase already started
+  | 'tail-rescue'      // engine-dropped tail: all but the final content
+                       //   word matched, the final never heard, and the
+                       //   next phrase audibly started — glide, not stall
   | 'restart-grace'    // post-restart grace: next-phrase evidence alone
   | 'far-skip'         // later phrase ≥advancePct while current <skip gate
   | 'self-heal';       // forced by the controller's stall self-heal
@@ -51,7 +54,8 @@ export interface MatchEvent {
   rule: MatchRule;
   /** Content-word hits backing the move at fire time: the from-phrase's
       count for advances, the target's for jumps, the next phrase's
-      unambiguous count for grace. Proves no zero-evidence moves. */
+      unambiguous count for grace and tail-rescue. Proves no
+      zero-evidence moves. */
   evidence: number;
 }
 
@@ -82,6 +86,14 @@ export class PhraseMatcher {
   /** Previous fed word — a consecutive duplicate (interim re-emission)
       may exact-match a genuinely repeated token but never fuzzy-match. */
   private prevWord = '';
+  /** Every word form that has ever been consumed by some token. The
+      per-phrase consume-once sets die with dropBefore(), so a
+      re-emitted old word ("and", consumed two phrases ago) could
+      fuzzy-claim a fresh token ("end") after its phrase was dropped —
+      the EN native tape's t=78883 batch did exactly that. A form that
+      found a home may exact-match again (genuinely repeated words)
+      but never fuzzy-match a different token. */
+  private consumed = new Set<string>();
   current = 0;
   finished = false;
 
@@ -105,6 +117,17 @@ export class PhraseMatcher {
     let hit = 0;
     for (const idx of ph.contentIdx) if (set.has(idx)) hit++;
     return hit;
+  }
+
+  /** Content-match ratio counting EXACT hits only (0..1). */
+  private exactContentProgress(p: number): number {
+    const ph = this.phrases[p];
+    const ex = this.exact.get(p);
+    if (!ph || ph.contentIdx.length === 0) return 0;
+    if (!ex) return 0;
+    let hit = 0;
+    for (const idx of ph.contentIdx) if (ex.has(idx)) hit++;
+    return hit / ph.contentIdx.length;
   }
 
   /** Snapshot for the flight recorder: current + lookahead match %. */
@@ -137,6 +160,21 @@ export class PhraseMatcher {
     return ph.tokens[ph.contentIdx[ph.contentIdx.length - 1]];
   }
 
+  /** Every content word except the final is matched (exact OR fuzzy);
+      vacuously true for single-content phrases. The tail-rescue
+      precondition — unlike the lead trigger this tolerates fuzzy
+      non-final hits, because the unambiguous next-phrase evidence does
+      the confirming. */
+  private allButFinalContentMatched(p: number): boolean {
+    const ph = this.phrases[p];
+    if (!ph || ph.contentIdx.length === 0) return false;
+    const set = this.matched.get(p);
+    for (let i = 0; i < ph.contentIdx.length - 1; i++) {
+      if (!set?.has(ph.contentIdx[i])) return false;
+    }
+    return true;
+  }
+
   /** Lead-mode trigger: every content word EXCEPT the final one is
       matched EXACTLY (requires ≥2 content words). Exact-only keeps the
       early swap honest — fuzzy ad-lib noise ("muitas"≈"muito") must
@@ -167,6 +205,7 @@ export class PhraseMatcher {
       if (set.has(t)) continue;
       if (wordsEqual(w, ph.tokens[t])) { // identical or same number
         set.add(t);
+        this.consumed.add(w);
         let ex = this.exact.get(p);
         if (!ex) {
           ex = new Set();
@@ -188,6 +227,7 @@ export class PhraseMatcher {
       if (set.has(t)) continue;
       if (fuzzyMatch(w, ph.tokens[t])) {
         set.add(t);
+        this.consumed.add(w);
         return t;
       }
     }
@@ -254,15 +294,24 @@ export class PhraseMatcher {
         this.current + this.cfg.lookahead,
         this.phrases.length - 1,
       );
-      const dupOfPrev = w === this.prevWord;
+      // Fuzzy rights: never for a consecutive duplicate, and never for
+      // a form that already found a home (survives dropBefore — see
+      // `consumed`). Exact matching is always allowed.
+      const fuzzyOk = w !== this.prevWord && !this.consumed.has(w);
       this.prevWord = w;
-      const hitCurrent = this.tryMatch(this.current, w, !dupOfPrev) >= 0;
+      const hitCurrent = this.tryMatch(this.current, w, fuzzyOk) >= 0;
       if (hitCurrent) {
         matchedAny = true;
         this.touchedCurrent = true;
       }
       for (let p = this.current + 1; p <= windowEnd; p++) {
-        const tIdx = this.tryMatch(p, w, !dupOfPrev);
+        // A word the current phrase already explains may still
+        // exact-match ahead (genuinely repeated words) but must not
+        // fuzzy-BANK lookahead credit: "and" exact-hit its own phrase
+        // and fuzzy-credited a later "end" (lev 1), poisoning that
+        // phrase's progress to 100% and teleporting the display
+        // (EN native tape t=76868).
+        const tIdx = this.tryMatch(p, w, fuzzyOk && !hitCurrent);
         if (tIdx >= 0) {
           matchedAny = true;
           // only count as forward evidence when the word could NOT be
@@ -300,21 +349,44 @@ export class PhraseMatcher {
               final === 'exact' &&
               (!shortFinal || pct >= this.cfg.finalWordMinPct)
             ) rule = 'final-exact';
-            else if (final === 'fuzzy' && pct >= this.cfg.finalWordMinPct) rule = 'final-fuzzy';
+            // A fuzzy final cannot be its own support: the backing pct
+            // excludes the final itself, else a 1-content phrase
+            // ("the end.") self-satisfies the gate on any near-miss.
+            else if (
+              final === 'fuzzy' &&
+              contentTotal > 0 &&
+              (hits - 1) / contentTotal >= this.cfg.finalWordMinPct
+            ) rule = 'final-fuzzy';
             else if (pct >= this.cfg.advancePct) rule = 'content-70';
             // Integer-aware completion: with ≥3 content words, all but
             // one matched completes the phrase — one untranscribable
             // loanword must never hold the display hostage.
             else if (contentTotal >= 3 && hits >= contentTotal - 1) rule = 'all-but-one';
-            // Boundary-crossing rescue: the phrase is half-said and the
-            // speaker has audibly started the NEXT phrase — a stalled
-            // half-match must not pin the display.
+            // Engine-dropped tail: everything except the final content
+            // word is in, the final was never heard AT ALL, and the
+            // speaker has audibly started the next phrase. Low-content
+            // phrases sit below the rescue gate forever otherwise —
+            // the recognizer simply never emitted "end" on the EN
+            // native tape and "the end." stalled until self-heal.
             else if (
-              pct >= this.cfg.rescuePct &&
+              this.finalContentMatched(this.current) === 'none' &&
+              this.allButFinalContentMatched(this.current) &&
               this.unambiguousEvidence(this.current + 1) >= 1
-            ) rule = 'boundary-rescue';
+            ) rule = 'tail-rescue';
           }
         }
+        // Boundary-crossing rescue: the phrase is half-in and the
+        // speaker has audibly started the NEXT phrase. Needs no touch:
+        // when the display lags, every hearable token of the phrase can
+        // arrive pre-consumed as lookahead credit (re-hearings then
+        // dup-suppress), so touch may be unobtainable — the EN web tape
+        // wedged on exactly that. The unambiguous next-phrase evidence
+        // IS live speech the current phrase cannot explain.
+        if (
+          rule === null &&
+          pct >= this.cfg.rescuePct &&
+          this.unambiguousEvidence(this.current + 1) >= 1
+        ) rule = 'boundary-rescue';
         // Post-restart grace: the current phrase's words may have been
         // eaten by the dead session, so next-phrase evidence alone is
         // enough (touchedCurrent may legitimately be false).
@@ -329,13 +401,18 @@ export class PhraseMatcher {
             this.unambiguousEvidence(this.current + 1), events,
           );
         } else if (rule !== null) {
-          if (rule === 'all-but-one' || rule === 'lead') {
+          if (rule === 'all-but-one' || rule === 'lead' || rule === 'tail-rescue') {
             // absorb the phrase's remaining word(s) when they arrive late
             const ph = this.phrases[this.current];
             const set = this.matched.get(this.current);
             this.leftover = ph.tokens.filter((_, t) => !set?.has(t));
           }
-          this.advanceTo(this.current + 1, 'advance', rule, hits, events);
+          // tail-rescue is backed by the NEXT phrase's unambiguous
+          // hits — the from-phrase count can legitimately be 0 there
+          const evidence = rule === 'tail-rescue'
+            ? this.unambiguousEvidence(this.current + 1)
+            : hits;
+          this.advanceTo(this.current + 1, 'advance', rule, evidence, events);
         }
       }
 
@@ -346,9 +423,20 @@ export class PhraseMatcher {
           this.current + this.cfg.lookahead,
           this.phrases.length - 1,
         );
-        if (this.progress(this.current) < this.cfg.skipCurrentBelowPct) {
+        // The current-phrase gate counts EXACT content only: a lone
+        // fuzzy hit on a mangled line ("baixo"≈"abaixo" when Safari
+        // heard "primeiro baixo" for "vermelha abaixo") must not pin
+        // the display while a later phrase is spoken unambiguously.
+        if (this.exactContentProgress(this.current) < this.cfg.skipCurrentBelowPct) {
           for (let j = this.current + 1; j <= wEnd; j++) {
-            if (this.progress(j) >= this.cfg.advancePct) {
+            // Progress alone can be poisoned by ambiguous credit (a
+            // word the current phrase also explains); a far jump needs
+            // at least one content hit that could NOT have been the
+            // current phrase.
+            if (
+              this.progress(j) >= this.cfg.advancePct &&
+              this.unambiguousEvidence(j) >= 1
+            ) {
               this.advanceTo(j, 'jump', 'far-skip', this.contentMatchedCount(j), events);
               break;
             }
@@ -378,6 +466,7 @@ export class PhraseMatcher {
     this.matched.clear();
     this.exact.clear();
     this.fresh.clear();
+    this.consumed.clear();
     this.touchedCurrent = false;
     this.leftover = null;
   }

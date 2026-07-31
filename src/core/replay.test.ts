@@ -187,6 +187,82 @@ it('lead-mode replay: zero moves inside the acceptance-tape ad-lib window', () =
   expect(inWindow).toEqual([]);
 });
 
+/* B.2 close-out tapes: first working on-device recognizer sessions.
+   EN pins the "the end" incident fix (see fixtures/README.md): the
+   engine never emitted "end", a stale "and" fuzzy-banked onto it, and
+   the display teleported a phrase ahead. The corrected replay must
+   glide via tail-rescue on the first next-phrase content evidence and
+   never jump. PT pins that the honest paths — evidence-backed
+   far-skip, live alias fold, ad-lib holds — survive the tightening. */
+import enNative from './fixtures/rigtest-en-native-2026-07-31.json';
+import ptNative from './fixtures/rigtest-pt-native-2026-07-31.json';
+
+describe('fixture en-native (B.2 close-out tape)', () => {
+  const log = enNative as unknown as SessionLog;
+  const r = replaySession(log);
+
+  it('kills the ambiguous far-skip teleport (tape: jump 30→31 at t=76868)', () => {
+    expect(r.moves.filter((m) => m.type === 'jump')).toEqual([]);
+  });
+
+  it('glides past the engine-dropped tail via tail-rescue on first next-phrase evidence', () => {
+    const phrases = segmentScript(log.script.body, log.script.lang);
+    const endIdx = phrases.findIndex((p) => p.text === 'the end.');
+    expect(endIdx).toBeGreaterThan(0);
+    const out = r.moves.find((m) => m.to === endIdx + 1);
+    // fires on "screen" (t=80492) — not a stall, not a mislabeled lead
+    expect(out?.rule).toBe('tail-rescue');
+    expect(out?.t).toBe(80492);
+    expect(out?.evidence).toBeGreaterThanOrEqual(1);
+  });
+
+  it('re-emission batches advance nothing (all six full re-statements consumed silently)', () => {
+    const batchTimes = [26476, 49060, 56705, 78883];
+    for (const m of r.moves) expect(batchTimes).not.toContain(m.t);
+  });
+
+  it('the ad-lib held and the tape finishes with every move evidenced', () => {
+    // weather improv ran t≈49255–52478; "good" at 52478 is the reader
+    // back on script (phrase-final word) — rule-correct boundary
+    const inWindow = r.moves.filter((m) => m.t > 49255 && m.t < 52478);
+    expect(inWindow).toEqual([]);
+    expect(r.finished).toBe(true);
+    for (const m of r.moves) expect(m.evidence).toBeGreaterThanOrEqual(1);
+  });
+});
+
+describe('fixture pt-native (B.2 close-out tape)', () => {
+  const log = ptNative as unknown as SessionLog;
+  const r = replaySession(log);
+
+  it('keeps the evidence-backed far-skip over the red line', () => {
+    const skip = r.moves.find((m) => m.rule === 'far-skip');
+    expect(skip?.t).toBe(75012);
+    expect(skip?.evidence).toBeGreaterThanOrEqual(3);
+  });
+
+  it('live alias fold still advances on "pro" → prompter (t=54623)', () => {
+    const m = r.moves.find((x) => x.t === 54623);
+    expect(m?.rule).toBe('lead');
+  });
+
+  it('re-emission batches and the ad-lib advance nothing', () => {
+    const batchTimes = [26059, 31403, 50123, 57508, 70158, 73613, 79611, 86829];
+    for (const m of r.moves) expect(batchTimes).not.toContain(m.t);
+    // comida improv ran t≈45878–48611; "voltar" at 48611 is script
+    const inAdlib = r.moves.filter((m) => m.t > 45201 && m.t < 48611);
+    expect(inAdlib).toEqual([]);
+  });
+
+  it('finishes with every move evidenced, never backward', () => {
+    expect(r.finished).toBe(true);
+    for (const m of r.moves) expect(m.evidence).toBeGreaterThanOrEqual(1);
+    for (let i = 1; i < r.path.length; i++) {
+      expect(r.path[i]).toBeGreaterThanOrEqual(r.path[i - 1]);
+    }
+  });
+});
+
 /* Real rig-session fixtures: drop "Copy log" JSON into ./fixtures and
    every file is replayed against the regression contract. */
 const realFixtures = Object.entries(

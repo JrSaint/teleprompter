@@ -77,10 +77,11 @@ export async function loadSessionLogs(): Promise<unknown[]> {
  * touched; re-running is a no-op thanks to the flag).
  */
 export async function seedRigScripts(seeds: Script[]): Promise<void> {
-  // v3: adds the alias demo line to the PT script. Upserts by id so
-  // updates reach devices seeded earlier (the two rig-test scripts are
-  // fixtures; local edits to them are intentionally replaced).
-  const FLAG = 'seeded_rigtest_v3';
+  // v4: adds "próprio" to the PT alias demo (first native rig tape,
+  // t=54787). Upserts by id so updates reach devices seeded earlier
+  // (the two rig-test scripts are fixtures; local edits to them are
+  // intentionally replaced).
+  const FLAG = 'seeded_rigtest_v4';
   if (await db.getItem(FLAG)) return;
   const scripts = await loadScripts();
   for (const seed of seeds) {
