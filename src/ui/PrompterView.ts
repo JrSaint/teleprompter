@@ -334,7 +334,7 @@ export function createPrompterView(
       paintDiag(diag.snapshot());
     },
     onMic: (s, detail) => paintStatus(s, detail),
-  }, { mode: settings.swapTiming, header });
+  }, { mode: settings.swapTimingByLang[script.lang] ?? 'lead', header });
 
   const unsubDiag = diag.subscribe(paintDiag);
   diagEl.hidden = !settings.diagOverlay;

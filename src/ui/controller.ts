@@ -324,15 +324,25 @@ export class PrompterController {
     }
   }
 
-  /* --- clump stepping: never jump-cut past a phrase, and never lurch
-     — every displayed phrase gets ≥STEP_DWELL_MS on screen, whether
-     the advances came in one clump or in back-to-back feeds ---------- */
+  /* --- catch-up collapse (B.3.5): a gulp of ≥2 advances renders as
+     ONE transition to the final position — the A.2-era step-with-dwell
+     rule predates ladder and Flow, and its intermediate hops were the
+     founder's "flash". Anything queued but not yet rendered collapses
+     too; skipped positions are logged as display-collapsed (decision
+     logs are untouched). Single advances keep the ≥STEP_DWELL_MS
+     spacing so back-to-back feeds still never lurch. --------------- */
   private lastStepAt = -Infinity;
 
   private pushSteps(events: MatchEvent[], finished: boolean): void {
-    for (const e of events) this.stepQueue.push(e.to);
-    if (finished) this.stepQueue.push('end');
-    if (this.stepTimer) return;
+    const targets: Array<number | 'end'> = events.map((e) => e.to);
+    if (finished) targets.push('end');
+    const skipped = [...this.stepQueue, ...targets.slice(0, -1)]
+      .filter((x): x is number => x !== 'end');
+    if (skipped.length > 0) {
+      this.recorder.mic('display-collapsed', skipped.join(','));
+    }
+    this.stepQueue = [targets[targets.length - 1]];
+    if (this.stepTimer) return; // the pending timer renders the new final
     const wait = this.lastStepAt + STEP_DWELL_MS - performance.now();
     if (wait > 0) {
       this.stepTimer = setTimeout(() => this.drainSteps(), wait);
@@ -428,18 +438,47 @@ export class PrompterController {
 
   /* --- Flow mode: predictive swap ---------------------------------- */
 
+  /** One reason line per phrase+cause: why prediction is currently
+      impossible — stall audits classify rail suppression from the
+      tape instead of guessing (B.3.5 finding 2). */
+  private lastRailLogKey = '';
+  private logRail(reason: string): void {
+    const key = `${this.matcher.current}:${reason}`;
+    if (key === this.lastRailLogKey) return;
+    this.lastRailLogKey = key;
+    this.recorder.mic('flow-rail', `phrase ${this.matcher.current + 1}: ${reason}`);
+  }
+
+  private railReason(): string | null {
+    if (this.matcher.current !== this.evidencedAt) return 'chain-rail';
+    if (!this.matcher.touched) return 'untouched';
+    const total = this.phrases[this.matcher.current]?.contentIdx.length ?? 0;
+    if (total === 0) return 'no-content';
+    if (this.flowModel.suspended) return 'suspended (unmatched token)';
+    const hits = this.matcher.contentMatchedCount(this.matcher.current);
+    if (hits / total < 0.5) return `below-arm (${hits}/${total} content)`;
+    if (this.flowModel.medianRate() === null) return 'cold-model (warm-up)';
+    return null;
+  }
+
   /** (Re)arm the prediction timer after every consumed batch. All
       rails re-check at fire time — the timer is only a wake-up. */
   private scheduleFlowPredict(): void {
     if (this.flowTimer) clearTimeout(this.flowTimer);
     this.flowTimer = null;
     if (!this.flowEnabled || this.matcher.finished) return;
-    // chain rail: predict only from the evidenced frontier
-    if (this.matcher.current !== this.evidencedAt) return;
+    const reason = this.railReason();
+    if (reason) {
+      this.logRail(reason);
+      return;
+    }
     const w = this.flowWindow();
     if (!w) return;
     const now = performance.now();
-    if (now > w.deadline) return; // pause, not missed speech
+    if (now > w.deadline) {
+      this.logRail('overdue (pause, defer to hold)');
+      return;
+    }
     this.flowTimer = setTimeout(
       () => this.fireFlowPredict(),
       Math.max(0, w.fireAt - now),
@@ -459,13 +498,16 @@ export class PrompterController {
 
   private fireFlowPredict(): void {
     this.flowTimer = null;
-    if (
-      !this.flowEnabled ||
-      this.flow.state !== 'following' || // suppressed in holding/armed
-      this.micStatus !== 'listening' ||
-      this.matcher.finished ||
-      this.matcher.current !== this.evidencedAt
-    ) return;
+    if (!this.flowEnabled || this.matcher.finished) return;
+    if (this.flow.state !== 'following') {
+      this.logRail(`suppressed (${this.flow.state})`);
+      return;
+    }
+    if (this.micStatus !== 'listening') {
+      this.logRail(`suppressed (mic ${this.micStatus})`);
+      return;
+    }
+    if (this.matcher.current !== this.evidencedAt) return;
     const w = this.flowWindow();
     const now = performance.now();
     if (!w || now < w.fireAt || now > w.deadline) return;

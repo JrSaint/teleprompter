@@ -19,6 +19,7 @@ export interface SetupCallbacks {
 
 const CHECKLIST = [
   'Three lines, read downward, wrap to the top like a new page — speak straight through at your own pace',
+  'EN swaps on your rhythm (Flow); PT waits for confirmed words (Lead) until its engine is cured',
   'iPad brightness at maximum',
   'Auto-Lock off (Settings › Display & Brightness)',
   'Rig hood zipped, glass clean, camera centered',
@@ -161,19 +162,21 @@ export function createSetupView(
         <input type="checkbox" id="set-mv" ${settings.mirrorV ? 'checked' : ''}></label>
       <label class="su-row su-toggle"><span>Diagnostics overlay</span>
         <input type="checkbox" id="set-diag" ${settings.diagOverlay ? 'checked' : ''}></label>
-      <label class="su-row"><span>Swap timing</span>
-        <select id="set-swap">
-          <option value="lead" ${settings.swapTiming === 'lead' ? 'selected' : ''}>Lead</option>
-          <option value="confirm" ${settings.swapTiming === 'confirm' ? 'selected' : ''}>Confirm</option>
-          <option value="flow" ${settings.swapTiming === 'flow' ? 'selected' : ''}>Flow (experimental)</option>
+      <label class="su-row"><span>Swap timing 🇺🇸</span>
+        <select id="set-swap-en">
+          <option value="flow" ${settings.swapTimingByLang['en-US'] === 'flow' ? 'selected' : ''}>Flow</option>
+          <option value="lead" ${settings.swapTimingByLang['en-US'] === 'lead' ? 'selected' : ''}>Lead</option>
+          <option value="confirm" ${settings.swapTimingByLang['en-US'] === 'confirm' ? 'selected' : ''}>Confirm</option>
         </select></label>
-      <div class="su-engine-hint">${
-        settings.swapTiming === 'flow'
-          ? 'Flow predicts from your reading pace and swaps on your rhythm — experimental.'
-          : settings.swapTiming === 'confirm'
-            ? 'Confirm swaps when the phrase completes.'
-            : 'Lead swaps early, just before the last word.'
-      }</div>
+      <label class="su-row"><span>Swap timing 🇧🇷</span>
+        <select id="set-swap-pt">
+          <option value="lead" ${settings.swapTimingByLang['pt-BR'] === 'lead' ? 'selected' : ''}>Lead</option>
+          <option value="confirm" ${settings.swapTimingByLang['pt-BR'] === 'confirm' ? 'selected' : ''}>Confirm</option>
+          <option value="flow" ${settings.swapTimingByLang['pt-BR'] === 'flow' ? 'selected' : ''}>Flow</option>
+        </select></label>
+      <div class="su-engine-hint">Flow rides your reading rhythm (the
+        EN default per the A/B); Lead waits for words — PT keeps Lead
+        until its engine is cured. Confirm swaps on completion.</div>
       <label class="su-row"><span>Display</span>
         <select id="set-display">
           <option value="ladder" ${settings.displayMode === 'ladder' ? 'selected' : ''}>Ladder (3 lines)</option>
@@ -218,10 +221,15 @@ export function createSetupView(
       settings.diagOverlay = (e.target as HTMLInputElement).checked;
       void persistSettings();
     };
-    (card.querySelector('#set-swap') as HTMLSelectElement).onchange = (e) => {
-      settings.swapTiming = (e.target as HTMLSelectElement).value as 'lead' | 'confirm' | 'flow';
+    (card.querySelector('#set-swap-en') as HTMLSelectElement).onchange = (e) => {
+      settings.swapTimingByLang['en-US'] =
+        (e.target as HTMLSelectElement).value as 'lead' | 'confirm' | 'flow';
       void persistSettings();
-      renderSettingsCard();
+    };
+    (card.querySelector('#set-swap-pt') as HTMLSelectElement).onchange = (e) => {
+      settings.swapTimingByLang['pt-BR'] =
+        (e.target as HTMLSelectElement).value as 'lead' | 'confirm' | 'flow';
+      void persistSettings();
     };
     (card.querySelector('#set-display') as HTMLSelectElement).onchange = (e) => {
       settings.displayMode = (e.target as HTMLSelectElement).value as 'karaoke' | 'ladder';

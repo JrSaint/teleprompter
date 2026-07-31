@@ -15,7 +15,11 @@ shell with a custom Swift NativeSpeech plugin. Tests: `npx vitest run`.
   crossfade (`SWAP_FADE_MS` in `src/ui/PrompterView.ts`). Never
   scroll, slide, or zoom prompter text.
 - The display advances only because words were spoken; silence and
-  ad-lib hold; never auto-backward.
+  ad-lib hold; never auto-backward. Swap timing is per-language
+  (B.3.5 duel verdict: EN = Flow, PT = Lead until its engine is
+  cured); Flow's rails log their suppression reasons (`flow-rail`
+  events), and catch-up gulps of ≥2 advances render as ONE
+  transition (`display-collapsed` events).
 - All speech processing on-device — no cloud speech APIs, ever.
 - Prompter typography: current and next line at the SAME
   distance-derived size, one block, emphasis by brightness only;
@@ -40,6 +44,12 @@ shell with a custom Swift NativeSpeech plugin. Tests: `npx vitest run`.
   read word-by-word as tokens confirm. Needs per-word matched-state
   surfaced from the matcher to the display plus a "Line vs Word"
   brightening setting. Revisit after the display + timing A/Bs.
+- **Dropout hunt matrix** (B.3.5): PT dropouts (3–13s mid-read) AND
+  the EN stall class — cold-launch first session (~5s to listening,
+  first sentence consumed but never emitted) and mid-read ~2-4s
+  token gaps. Needs device tapes; the simulator recognizer cannot
+  initialize at all (B.2: instant task failure), so it cannot host
+  this class.
 - **NativeSpeechPlugin sync consolidation** (B.3.3 review debt): the
   plugin has three synchronization domains (stateQueue, meterLock,
   unsynchronized session objects across four threads). Fold

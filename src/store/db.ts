@@ -23,10 +23,12 @@ export interface Settings {
   sizeMult: number;     // 1.0–2.0 user multiplier on computed size
   diagOverlay: boolean; // diagnostics overlay on the prompter
   voiceStart: boolean;  // armed mode auto-starts on first phrase heard
-  /** Lead: swap when all but the final content word is in (default).
-      Confirm: swap only on phrase completion. Flow: lead rules plus a
-      pace-model predictive swap (experimental, off until A/B). */
-  swapTiming: 'lead' | 'confirm' | 'flow';
+  /** Swap timing per language (B.3.5 duel verdict: Flow locked for
+      EN; PT stays Lead until its engine is cured). Lead: swap when
+      all but the final content word is in. Confirm: swap only on
+      completion. Flow: lead rules plus the pace-model predictive
+      swap. */
+  swapTimingByLang: Record<Lang, 'lead' | 'confirm' | 'flow'>;
   /** Next-phrase preview opacity (eye-voice span legibility). */
   previewOpacity: number;
   /** Speech engine: web (Safari API) or native (iPad app, on-device). */
@@ -44,7 +46,7 @@ export const DEFAULT_SETTINGS: Settings = {
   sizeMult: 1.4,
   diagOverlay: false,
   voiceStart: true,
-  swapTiming: 'lead',
+  swapTimingByLang: { 'en-US': 'flow', 'pt-BR': 'lead' },
   previewOpacity: 0.6,
   engine: 'web',
   displayMode: 'ladder',
@@ -61,8 +63,17 @@ export async function saveScripts(scripts: Script[]): Promise<void> {
 }
 
 export async function loadSettings(): Promise<Settings> {
-  const saved = (await db.getItem<Partial<Settings>>('settings')) ?? {};
-  return { ...DEFAULT_SETTINGS, ...saved };
+  const saved =
+    (await db.getItem<Partial<Settings> & { swapTiming?: string }>('settings')) ?? {};
+  // pre-B.3.5 logs stored a single swapTiming scalar; the per-language
+  // defaults (EN flow / PT lead — the duel verdict) supersede it
+  delete saved.swapTiming;
+  const merged = { ...DEFAULT_SETTINGS, ...saved };
+  merged.swapTimingByLang = {
+    ...DEFAULT_SETTINGS.swapTimingByLang,
+    ...(saved.swapTimingByLang ?? {}),
+  };
+  return merged;
 }
 
 export async function saveSettings(s: Settings): Promise<void> {

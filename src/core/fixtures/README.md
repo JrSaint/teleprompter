@@ -56,3 +56,12 @@ display A/B (verdict: ladder, "far preferred"; now the default). EN
 tapes finished; both PT tapes were ABANDONED mid-read during engine
 dropouts (watchdog firings recorded) — the generic replay contract
 accepts an aborted tape when replay reaches the recorded position.
+
+## B.3.5 duel tapes (2026-07-31)
+
+`rigtest-en-{lead,flow}-duel-2026-07-31.json` — the Lead-vs-Flow duel
+(verdict: Flow "much better", locked as the EN default; PT stays Lead).
+The flow tape carries the first live flow-predict (t=20117, rate 425ms,
+one phrase beyond evidence, outside the ad-lib) and a sessionId-stamped
+summary. The lead tape shows the EN cold-launch stall class: ~4.8s to
+listening and the whole first sentence consumed but never emitted.
