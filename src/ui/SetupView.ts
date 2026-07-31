@@ -18,7 +18,7 @@ export interface SetupCallbacks {
 }
 
 const CHECKLIST = [
-  'It reads like two lines of a script — speak straight through from the bright line into the dim one at your own pace',
+  'Three lines, read downward, wrap to the top like a new page — speak straight through at your own pace',
   'iPad brightness at maximum',
   'Auto-Lock off (Settings › Display & Brightness)',
   'Rig hood zipped, glass clean, camera centered',
@@ -176,8 +176,8 @@ export function createSetupView(
       }</div>
       <label class="su-row"><span>Display</span>
         <select id="set-display">
-          <option value="karaoke" ${settings.displayMode === 'karaoke' ? 'selected' : ''}>Karaoke (2 lines)</option>
           <option value="ladder" ${settings.displayMode === 'ladder' ? 'selected' : ''}>Ladder (3 lines)</option>
+          <option value="karaoke" ${settings.displayMode === 'karaoke' ? 'selected' : ''}>Karaoke (2 lines)</option>
         </select></label>
       <div class="su-engine-hint">${
         settings.displayMode === 'ladder'

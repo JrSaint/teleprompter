@@ -67,6 +67,8 @@ export class PrompterController {
       the metric must say why n is low, never silently read 0. */
   private vadSampler = new LagSampler();
   private s2sInvalid = 0;
+  /** the next fresh non-batch feed carries a NEW phrase's first token */
+  private awaitingPhraseFirst = false;
   /** Bumped when a stretch's summary is emitted: a paint-frame sample
       from a closed stretch is discarded, never leaked into the next
       (verify finding: the finished advance's rAF lands post-summary). */
@@ -212,6 +214,14 @@ export class PrompterController {
     {
       const lag = this.vadSampler.tokens(t0, isBatch);
       if (lag !== null) diag.vadLag(lag);
+      // phrase-boundary sampling: a new phrase's first fresh token may
+      // pair with recent unconsumed VAD activity (fluent reading
+      // yields few quiet→voice onsets — B.3.4 finding 2)
+      if (this.awaitingPhraseFirst && !isBatch && words.length > 0) {
+        this.awaitingPhraseFirst = false;
+        const b = this.vadSampler.phraseFirstToken(t0);
+        if (b !== null) diag.vadLag(b);
+      }
     }
 
     const from = this.matcher.current;
@@ -248,6 +258,7 @@ export class PrompterController {
       // rule-based moves are real evidence — Flow's chain rail resets
       this.evidencedAt = this.matcher.current;
       this.healed = false;
+      this.awaitingPhraseFirst = true;
     } else {
       // every consumed batch logs its decision, matched or not — an
       // unmatched stretch (ad-lib after a hold) must not go dark in
@@ -482,6 +493,9 @@ export class PrompterController {
   /** Space: arm (mic on, waiting for the current phrase). */
   arm(): void {
     if (this.flow.state === 'finished') this.restart();
+    // every measured distribution starts fresh per session — stale
+    // overlay stats masked two whole reads (B.3.4 finding 1)
+    diag.resetSession();
     this.flow.to('armed');
     this.speech.start(this.locale, this.vocabulary);
     this.bumpHoldTimer();
@@ -503,6 +517,7 @@ export class PrompterController {
     // low sample count explains itself instead of reading as silence.
     const seg = this.emissionSamples;
     const vad = this.vadSampler.samples;
+    const boundary = this.vadSampler.boundarySamples;
     const lag =
       seg.length >= vad.length && seg.length > 0
         ? { count: seg.length, medianMs: median(seg), p90Ms: p90(seg), source: 'segments' as const }
@@ -532,12 +547,16 @@ export class PrompterController {
         },
         lag,
         { invalidSamples, voidedByHold, note },
+        boundary.length > 0
+          ? { count: boundary.length, medianMs: median(boundary), p90Ms: p90(boundary) }
+          : undefined,
       );
       this.s2sSamples = [];
       this.emissionSamples = [];
       this.vadSampler.reset();
       this.s2sInvalid = 0;
     }
+    this.awaitingPhraseFirst = false;
     this.stretchSeq++;
     this.persistLog();
   }

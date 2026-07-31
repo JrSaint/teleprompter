@@ -1,9 +1,13 @@
 # Voice Prompter
 
 A voice-following teleprompter for an iPad in a beam-splitter rig (Glide
-Gear TMP 100). It never scrolls and never sets the pace: one phrase is
-shown large and centered (next phrase dimmed below), and the display
-advances phrase by phrase because the speaker said the words. Silence or
+Gear TMP 100). It never scrolls and never sets the pace: text sits in
+three fixed lines read strictly downward (the Ladder display — the
+line being read at full brightness, the next two dimmed in steps;
+when the bottom line finishes, the reading position wraps back to the
+top like a new page), and the display advances phrase by phrase
+because the speaker said the words. A two-line Karaoke display
+remains a settings option. Silence or
 ad-libbing holds; skipping ahead is detected and followed. English
 (en-US) and Brazilian Portuguese (pt-BR), all processing on-device.
 

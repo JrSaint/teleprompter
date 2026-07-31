@@ -452,6 +452,61 @@ describe('flow replay synthetic', () => {
   });
 });
 
+/* B.3.4 A/B verdict tapes: two displays x two languages, recorded on
+   the B.3.3 build. Ad-libs hold, the red-line far-skip fires where
+   the reader reached it, ladder headers carry the 100/60/35 tiers,
+   and the aborted PT reads replay to their recorded positions. */
+import enKaraoke from './fixtures/rigtest-en-karaoke-b34-2026-07-31.json';
+import enLadder from './fixtures/rigtest-en-ladder-b34-2026-07-31.json';
+import ptKaraoke from './fixtures/rigtest-pt-karaoke-b34-2026-07-31.json';
+import ptLadder from './fixtures/rigtest-pt-ladder-b34-2026-07-31.json';
+
+describe.each([
+  // [name, log, ad-lib window, expect far-skip, expect finished]
+  ['en-karaoke', enKaraoke as unknown as SessionLog, [31400, 35608], true, true],
+  ['en-ladder', enLadder as unknown as SessionLog, [27500, 32658], true, true],
+  ['pt-karaoke', ptKaraoke as unknown as SessionLog, [24812, 38459], true, false],
+  ['pt-ladder', ptLadder as unknown as SessionLog, [37200, 43067], false, false],
+] as const)('b34 verdict tape %s', (_name, log, adlib, hasSkip, finished) => {
+  const r = replaySession(log);
+
+  it('replays with every move evidenced, never backward', () => {
+    for (const m of r.moves) expect(m.evidence).toBeGreaterThanOrEqual(1);
+    for (let i = 1; i < r.path.length; i++) {
+      expect(r.path[i]).toBeGreaterThanOrEqual(r.path[i - 1]);
+    }
+  });
+
+  it('the ad-lib window advances nothing', () => {
+    expect(r.moves.filter((m) => m.t > adlib[0] && m.t < adlib[1])).toEqual([]);
+  });
+
+  it(hasSkip ? 'the far-skip fires' : 'no far-skip (reader never reached the red line)', () => {
+    expect(r.moves.some((m) => m.rule === 'far-skip')).toBe(hasSkip);
+  });
+
+  it(finished ? 'replays to finished' : 'aborted read replays to the recorded position', () => {
+    if (finished) {
+      expect(r.finished).toBe(true);
+    } else {
+      const liveMax = Math.max(
+        ...log.events.filter((e) => e.kind === 'decision').map((e) => e.to),
+      );
+      expect(r.finalIndex).toBeGreaterThanOrEqual(liveMax);
+    }
+  });
+
+  it('the header records what rendered, with ladder brightness tiers', () => {
+    expect(log.header).toBeDefined();
+    expect(log.header!.segmenterVersion).toBe(2);
+    if (log.header!.displayMode === 'ladder') {
+      expect(log.header!.brightness).toEqual({ active: 1, next: 0.6, nextNext: 0.35 });
+    } else {
+      expect(log.header!.brightness).toEqual({ active: 1, next: 0.6 });
+    }
+  });
+});
+
 /* Real rig-session fixtures: drop "Copy log" JSON into ./fixtures and
    every file is replayed against the regression contract. */
 const realFixtures = Object.entries(
@@ -467,7 +522,10 @@ describe.skipIf(realFixtures.length === 0)('real rig fixtures', () => {
         expect(move.evidence).toBeGreaterThanOrEqual(1);
       }
       const tokenCount = log.events.filter((e) => e.kind === 'token').length;
-      if (tokenCount > 0) {
+      const tapeFinished = log.events.some(
+        (e) => e.kind === 'state' && e.state === 'finished',
+      );
+      if (tokenCount > 0 && tapeFinished) {
         // logs recorded before B.2 don't say which swap timing they ran
         // with — accept a finish in either mode for those
         const finished =
@@ -475,6 +533,15 @@ describe.skipIf(realFixtures.length === 0)('real rig fixtures', () => {
           (log.swapTiming === undefined &&
             replaySession(log, { leadMode: true }).finished);
         expect(finished).toBe(true);
+      } else if (tokenCount > 0) {
+        // the founder stopped this session early (B.3.4 PT reads were
+        // abandoned mid-dropout) — replay must still reach at least
+        // the position the live session reached
+        const liveMax = Math.max(
+          0,
+          ...log.events.filter((e) => e.kind === 'decision').map((e) => e.to),
+        );
+        expect(r.finalIndex).toBeGreaterThanOrEqual(liveMax);
       } else {
         // failure-capture fixture (e.g. the native zero-output session):
         // nothing was heard, so nothing may move

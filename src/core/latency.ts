@@ -15,15 +15,27 @@
 export const STALE_SAMPLE_MS = 3000;
 export const BATCH_MIN_TOKENS = 4;
 
+/** Phrase-boundary sampling window: a phrase's first fresh token may
+    pair with an UNCONSUMED onset this recent (B.3.4 finding 2 —
+    fluent reading produces few quiet→voice onsets; boundary pairing
+    recovers samples without fabricating any). */
+export const BOUNDARY_WINDOW_MS = 1500;
+
 export class LagSampler {
   private pending: number | null = null;
+  /** most recent onset and whether any sample consumed it */
+  private lastOnset: number | null = null;
+  private lastOnsetConsumed = false;
   readonly samples: number[] = [];
+  readonly boundarySamples: number[] = [];
   invalid = 0;
   voidedByHold = 0;
 
   /** A quiet→voice onset at `wall` opens/replaces the pending sample. */
   onset(wall: number): void {
     this.pending = wall;
+    this.lastOnset = wall;
+    this.lastOnsetConsumed = false;
   }
 
   /** The session entered holding — the pending onset is an ad-lib. */
@@ -47,15 +59,39 @@ export class LagSampler {
     this.pending = null;
     if (lag > 0 && lag <= STALE_SAMPLE_MS) {
       this.samples.push(lag);
+      this.lastOnsetConsumed = true;
       return lag;
     }
     this.invalid++;
     return null;
   }
 
+  /** A new phrase's first fresh token arrived at `wall`: when recent
+      VAD activity is available (an unconsumed onset inside the
+      boundary window), pair it — otherwise no sample, never a
+      fabricated one. */
+  phraseFirstToken(wall: number): number | null {
+    if (
+      this.lastOnset === null ||
+      this.lastOnsetConsumed ||
+      wall - this.lastOnset > BOUNDARY_WINDOW_MS
+    ) return null;
+    const lag = Math.round(wall - this.lastOnset);
+    this.lastOnsetConsumed = true;
+    this.pending = null; // fully consumed — no second sample later
+    if (lag > 0) {
+      this.boundarySamples.push(lag);
+      return lag;
+    }
+    return null;
+  }
+
   reset(): void {
     this.pending = null;
+    this.lastOnset = null;
+    this.lastOnsetConsumed = false;
     this.samples.length = 0;
+    this.boundarySamples.length = 0;
     this.invalid = 0;
     this.voidedByHold = 0;
   }

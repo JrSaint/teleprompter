@@ -115,6 +115,20 @@ class Diagnostics {
     this.push();
   }
 
+  /** Per-session metric reset, called at each arm (B.3.4 finding 1:
+      overlay stats spanned sessions — paired reads showed identical
+      stale numbers). Env, level, and the event log survive; every
+      measured distribution starts fresh. */
+  resetSession(): void {
+    this.state.restartCount = 0;
+    this.state.restartGaps = [];
+    this.state.advanceLatencies = [];
+    this.state.speechToSwap = [];
+    this.state.emissionLag = [];
+    this.state.vadLag = [];
+    this.push();
+  }
+
   reset(): void {
     this.state = {
       restartCount: 0, restartGaps: [], advanceLatencies: [],

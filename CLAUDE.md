@@ -8,8 +8,9 @@ shell with a custom Swift NativeSpeech plugin. Tests: `npx vitest run`.
 ## Design laws (locked — do not revisit)
 
 - **Light moves, text doesn't.** No feature may animate text position
-  on the prompter screen. Text sits in fixed slots (karaoke: 2,
-  ladder: 3) and the line being read brightens IN PLACE; the only
+  on the prompter screen. Text sits in fixed slots (ladder: 3 —
+  the default per the B.3.4 A/B verdict; karaoke: 2, settings
+  option) and the line being read brightens IN PLACE; the only
   permitted transition is brightness (opacity), e.g. the swap
   crossfade (`SWAP_FADE_MS` in `src/ui/PrompterView.ts`). Never
   scroll, slide, or zoom prompter text.

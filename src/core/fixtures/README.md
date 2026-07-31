@@ -48,3 +48,11 @@ so fixtures stay pinned to their own reality as the segmenter evolves.
 New tapes: `rigtest-en-b33-2026-07-31.json` / `rigtest-pt-b33-2026-07-31.json`
 (VAD onsets + summary events; the metric-sampler acceptance replays
 them in `latency.test.ts`).
+
+## B.3.4 verdict tapes (2026-07-31)
+
+`rigtest-{en,pt}-{karaoke,ladder}-b34-2026-07-31.json` — the founder's
+display A/B (verdict: ladder, "far preferred"; now the default). EN
+tapes finished; both PT tapes were ABANDONED mid-read during engine
+dropouts (watchdog firings recorded) — the generic replay contract
+accepts an aborted tape when replay reaches the recorded position.

@@ -31,8 +31,9 @@ export interface Settings {
   previewOpacity: number;
   /** Speech engine: web (Safari API) or native (iPad app, on-device). */
   engine: 'web' | 'native';
-  /** Display pattern: karaoke (2 slots, alternating) or ladder
-      (3 slots, strictly downward with a wrap to the top). */
+  /** Display pattern: ladder (3 slots, strictly downward with a wrap
+      to the top — the B.3.4 A/B verdict, "far preferred") or karaoke
+      (2 slots, alternating). */
   displayMode: 'karaoke' | 'ladder';
 }
 
@@ -46,7 +47,7 @@ export const DEFAULT_SETTINGS: Settings = {
   swapTiming: 'lead',
   previewOpacity: 0.6,
   engine: 'web',
-  displayMode: 'karaoke',
+  displayMode: 'ladder',
 };
 
 const db = localforage.createInstance({ name: 'voice-prompter' });

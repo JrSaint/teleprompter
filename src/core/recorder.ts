@@ -54,6 +54,13 @@ export type SessionEvent =
       /** why the sample count is low, when it is — the metric must
           never silently read 0 (B.3.3 finding 2, hard gate) */
       note?: string;
+      /** phrase-boundary samples: first fresh token of a phrase paired
+          with recent unconsumed VAD activity (≤1500ms) — reported
+          separately from the primary onset↔token distribution */
+      boundaryLag?: { count: number; medianMs: number; p90Ms: number };
+      /** which session this stretch belonged to — summaries must be
+          attributable when pooled (B.3.4 finding 1) */
+      sessionId?: string;
     };
 
 /** SessionEvent without its timestamp, distributed over the union. */
@@ -157,6 +164,7 @@ export class FlightRecorder {
       source: 'segments' | 'vad-onset';
     },
     accounting?: { invalidSamples?: number; voidedByHold?: number; note?: string },
+    boundaryLag?: { count: number; medianMs: number; p90Ms: number },
   ): void {
     this.push({
       kind: 'summary', speechToSwap,
@@ -164,6 +172,8 @@ export class FlightRecorder {
       ...(accounting?.invalidSamples ? { invalidSamples: accounting.invalidSamples } : {}),
       ...(accounting?.voidedByHold ? { voidedByHold: accounting.voidedByHold } : {}),
       ...(accounting?.note ? { note: accounting.note } : {}),
+      ...(boundaryLag ? { boundaryLag } : {}),
+      ...(this.log ? { sessionId: this.log.id } : {}),
     });
   }
 
