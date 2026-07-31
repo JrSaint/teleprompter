@@ -77,6 +77,7 @@ final class NativeSpeechAnalyzer {
             "installed": installedList.map { $0.identifier },
             "dictationSupported": dictSupported,
             "dictationInstalled": dictInstalled,
+            "onDeviceByLocale": plugin?.onDeviceProbe() ?? [:],
         ]
 
         // Hardware gate: a device whose SpeechTranscriber support list

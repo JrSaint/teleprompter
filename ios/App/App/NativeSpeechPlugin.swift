@@ -42,6 +42,13 @@ public class NativeSpeechPlugin: CAPPlugin, CAPBridgedPlugin {
     private var endedAtEpochMs: Double = 0
     private var analyzerBox: AnyObject?
 
+    // restart discipline: a session that dies without producing words
+    // counts as a failure; respawns back off exponentially and stop
+    // for good after MAX_CONSECUTIVE_FAILURES — never a hot loop
+    private var consecutiveFailures = 0
+    private var wordsThisSession = false
+    private static let maxConsecutiveFailures = 5
+
     // start/stop serialization — the only writers of `active`
     private let stateQueue = DispatchQueue(label: "nativespeech.state")
     private var active = false
@@ -136,6 +143,17 @@ public class NativeSpeechPlugin: CAPPlugin, CAPBridgedPlugin {
         return session
     }
 
+    /// On-device recognition support for both app locales — answers
+    /// "which engine for PT" from any session's env, without a PT run.
+    func onDeviceProbe() -> [String: Bool] {
+        var probe: [String: Bool] = [:]
+        for id in ["en-US", "pt-BR"] {
+            probe[id] = SFSpeechRecognizer(locale: Locale(identifier: id))?
+                .supportsOnDeviceRecognition ?? false
+        }
+        return probe
+    }
+
     func sessionEnvFields() -> [String: Any] {
         let session = AVAudioSession.sharedInstance()
         let permission: String
@@ -178,6 +196,7 @@ public class NativeSpeechPlugin: CAPPlugin, CAPBridgedPlugin {
             "locale": recognizer.locale.identifier,
             "resolvedSupported": resolvedSupported,
             "onDevice": recognizer.supportsOnDeviceRecognition,
+            "onDeviceByLocale": onDeviceProbe(),
             "supported": supported,
             "installed": [],
         ]
@@ -219,6 +238,7 @@ public class NativeSpeechPlugin: CAPPlugin, CAPBridgedPlugin {
         req.requiresOnDeviceRecognition = true
         if !vocabulary.isEmpty { req.contextualStrings = vocabulary }
         request = req
+        wordsThisSession = false
 
         if endedAtEpochMs > 0 {
             let gap = Date().timeIntervalSince1970 * 1000 - endedAtEpochMs
@@ -239,15 +259,35 @@ public class NativeSpeechPlugin: CAPPlugin, CAPBridgedPlugin {
                     // metric for zero audio times.
                     ends.append((seg.timestamp + seg.duration) * 1000)
                 }
+                if !words.isEmpty {
+                    self.wordsThisSession = true
+                    self.consecutiveFailures = 0
+                }
                 self.emitWords(words, ends: ends, isFinal: result.isFinal, engine: "recognizer")
             }
             if let error = error {
                 self.emitStatus("error", detail: "recognition task: \(error.localizedDescription)")
             }
             if error != nil || (result?.isFinal ?? false) {
+                // A session that produced no words and died is a failure:
+                // back off exponentially and give up after a few — a hot
+                // restart loop is silence pretending to work.
+                if error != nil && !self.wordsThisSession {
+                    self.consecutiveFailures += 1
+                } else {
+                    self.consecutiveFailures = 0
+                }
+                if self.consecutiveFailures >= Self.maxConsecutiveFailures {
+                    let last = error?.localizedDescription ?? "unknown error"
+                    self.emitStatus("unavailable",
+                                    detail: "Recognition keeps failing on this device (\(last)). The native engine stopped. Use the Web engine for this script.")
+                    self.setInactive()
+                    return
+                }
+                let backoffMs = min(2000.0, 50.0 * pow(2.0, Double(self.consecutiveFailures)))
                 self.endedAtEpochMs = Date().timeIntervalSince1970 * 1000
                 self.emitStatus("restarting")
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                DispatchQueue.main.asyncAfter(deadline: .now() + backoffMs / 1000.0) {
                     if self.isActive { self.spawnRecognitionTask(recognizer) }
                 }
             }
