@@ -2,6 +2,7 @@ import type { SessionLog } from './recorder';
 import { segmentScript } from './segmenter';
 import { parseAliases } from './aliases';
 import { PhraseMatcher, type MatcherConfig, type MatchEvent } from './matcher';
+import { FlowModel, FLOW_HOLD_MS } from './flowpredict';
 
 /**
  * Replays a recorded session's token stream through the matcher (with
@@ -25,14 +26,17 @@ export interface ReplayResult {
 export function replaySession(
   log: SessionLog,
   cfg: Partial<MatcherConfig> = {},
+  opts: { flowPredict?: boolean } = {},
 ): ReplayResult {
   const phrases = segmentScript(log.script.body, log.script.lang);
   // the session's own aliases and swap timing apply unless overridden
+  // (flow = lead evidence rules + simulated predictive swaps)
   const m = new PhraseMatcher(phrases, {
     aliases: parseAliases(log.script.aliases),
-    ...(log.swapTiming ? { leadMode: log.swapTiming === 'lead' } : {}),
+    ...(log.swapTiming ? { leadMode: log.swapTiming !== 'confirm' } : {}),
     ...cfg,
   });
+  const flowOn = opts.flowPredict ?? log.swapTiming === 'flow';
   const moves: ReplayResult['moves'] = [];
   const path: number[] = [0];
 
@@ -41,6 +45,38 @@ export function replaySession(
   let restarting = false;
   let graceUntil = -1;
 
+  // Flow simulation state — mirrors the controller's rails exactly:
+  // rate model from confirmed content tokens, holding reconstructed
+  // from match times (a tape recorded in another mode has no flow
+  // state events), chain rail via the evidenced frontier, mic gate
+  // and timer lifetime from the recorded mic transitions (live fires
+  // only while listening, and stop/restart clears the pending timer).
+  const model = new FlowModel();
+  let lastMatchedT: number | null = null;
+  let evidencedAt = 0;
+  let micListening = true; // tapes without mic events stay permissive
+  let timerArmed = false;  // live arms the timer on each consume
+
+  const tryFlowPredict = (beforeT: number): void => {
+    if (!flowOn || m.finished || m.current !== evidencedAt) return;
+    if (!micListening || !timerArmed) return;
+    if (!m.touched) return; // banked credit alone is not the speaker
+    if (lastMatchedT === null) return; // armed — nothing heard yet
+    const ph = phrases[m.current];
+    const total = ph?.contentIdx.length ?? 0;
+    if (total === 0) return;
+    const hits = m.contentMatchedCount(m.current);
+    const w = model.window(total - hits, hits / total);
+    if (!w || w.fireAt >= beforeT || w.fireAt > w.deadline) return;
+    // suppressed while holding: no matched token in the silence window
+    if (w.fireAt - lastMatchedT > FLOW_HOLD_MS) return;
+    const e = m.flowAdvance();
+    if (e) {
+      moves.push({ ...e, t: Math.round(w.fireAt) });
+      path.push(e.to);
+    }
+  };
+
   for (const e of log.events) {
     if (e.kind === 'mic') {
       if (e.status === 'restarting') restarting = true;
@@ -48,15 +84,37 @@ export function replaySession(
         restarting = false;
         graceUntil = e.t + GRACE_MS;
       }
+      // mic-state transitions gate Flow; side-channel statuses
+      // (env/level/voice-onset/starting) are not state changes
+      if (e.status === 'listening') micListening = true;
+      else if (['restarting', 'stopped', 'denied', 'unavailable'].includes(e.status)) {
+        micListening = false;
+        timerArmed = false; // live clears the pending timer here
+      }
       continue;
     }
     if (e.kind !== 'token') continue;
+    tryFlowPredict(e.t);
     const res = m.feed([e.word], { grace: e.t <= graceUntil });
+    if (flowOn) {
+      timerArmed = true; // consume() reschedules the live timer
+      for (let i = 0; i < res.contentHits; i++) model.noteContent(e.t);
+      if (res.matchedAny) {
+        lastMatchedT = e.t;
+        if (res.lastWordMatched) model.noteMatched();
+      }
+      if (!res.lastWordMatched) model.noteUnmatched();
+    }
     for (const ev of res.events) {
       moves.push({ ...ev, t: e.t });
       path.push(ev.to);
+      evidencedAt = ev.to; // rule-based move — the frontier advances
     }
   }
+  // Live's timer needs no further token to fire — evaluate the window
+  // that matures after the tape's last token (a terminal mic event
+  // has already disarmed it above).
+  tryFlowPredict(Number.MAX_SAFE_INTEGER);
 
   return {
     moves,

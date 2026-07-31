@@ -46,7 +46,9 @@ export type MatchRule =
                        //   next phrase audibly started — glide, not stall
   | 'restart-grace'    // post-restart grace: next-phrase evidence alone
   | 'far-skip'         // later phrase ≥advancePct while current <skip gate
-  | 'self-heal';       // forced by the controller's stall self-heal
+  | 'self-heal'        // forced by the controller's stall self-heal
+  | 'flow-predict';    // Flow mode: pace-model predicted the remaining
+                       //   words were spoken before the engine emitted them
 
 export interface MatchEvent {
   type: 'advance' | 'jump';
@@ -69,6 +71,12 @@ export interface FeedResult {
   events: MatchEvent[];
   matchedAny: boolean; // at least one fed word matched a window phrase
   finished: boolean;   // advanced past the final phrase
+  /** fed words that consumed a CONTENT token (current or lookahead) —
+      the Flow pace model's confirmed-word signal */
+  contentHits: number;
+  /** whether the LAST fed word matched anything — an unmatched tail
+      suspends Flow prediction until evidence resumes */
+  lastWordMatched: boolean;
 }
 
 export class PhraseMatcher {
@@ -78,10 +86,12 @@ export class PhraseMatcher {
   private exact = new Map<number, Set<number>>();   // subset matched exactly
   private fresh = new Map<number, number>();        // unambiguous content hits
   private touchedCurrent = false; // a word matched the phrase WHILE current
-  /** After an all-but-one advance: the completed phrase's unmatched
-      tokens. The immediately following word, if it matches one of
-      them, is the tail of the OLD phrase — absorb it so it can't rush
-      an identical next phrase. */
+  /** After a lead/all-but-one/tail-rescue/flow advance: the completed
+      phrase's unmatched tokens. Late arrivals matching them are the
+      tail of the OLD phrase — absorbed one by one until the list is
+      exhausted or a non-leftover word arrives (a flow-predicted swap
+      can leave SEVERAL unspoken words; single-shot absorption let the
+      rest credit the next phrase and rush the display). */
   private leftover: string[] | null = null;
   /** Previous fed word — a consecutive duplicate (interim re-emission)
       may exact-match a genuinely repeated token but never fuzzy-match. */
@@ -273,20 +283,28 @@ export class PhraseMatcher {
   feed(words: string[], opts: FeedOptions = {}): FeedResult {
     const events: MatchEvent[] = [];
     let matchedAny = false;
+    let contentHits = 0;
+    let lastWordMatched = false;
     for (const raw of words) {
       let w = normalizeWord(raw);
       if (!w || this.finished) continue;
       // pronunciation aliases: fold recognized variant → script target
       w = this.cfg.aliases?.get(w) ?? w;
 
-      // absorb the tail word of a phrase completed via all-but-one
+      // absorb the completed phrase's late-arriving tail, word by
+      // word; the first non-leftover word ends the glide
       if (this.leftover !== null) {
-        const lw = this.leftover;
-        this.leftover = null;
-        if (lw.some((tok) => wordsEqual(w, tok) || fuzzyMatch(w, tok))) {
+        const hit = this.leftover.findIndex(
+          (tok) => wordsEqual(w, tok) || fuzzyMatch(w, tok),
+        );
+        if (hit >= 0) {
+          this.leftover.splice(hit, 1);
+          if (this.leftover.length === 0) this.leftover = null;
           matchedAny = true; // it's script speech, just already accounted
+          lastWordMatched = true;
           continue;
         }
+        this.leftover = null;
       }
 
       // match against the current phrase and the lookahead window
@@ -299,10 +317,13 @@ export class PhraseMatcher {
       // `consumed`). Exact matching is always allowed.
       const fuzzyOk = w !== this.prevWord && !this.consumed.has(w);
       this.prevWord = w;
-      const hitCurrent = this.tryMatch(this.current, w, fuzzyOk) >= 0;
+      const curIdx = this.tryMatch(this.current, w, fuzzyOk);
+      const hitCurrent = curIdx >= 0;
+      lastWordMatched = hitCurrent;
       if (hitCurrent) {
         matchedAny = true;
         this.touchedCurrent = true;
+        if (this.phrases[this.current].contentIdx.includes(curIdx)) contentHits++;
       }
       for (let p = this.current + 1; p <= windowEnd; p++) {
         // A word the current phrase already explains may still
@@ -314,10 +335,14 @@ export class PhraseMatcher {
         const tIdx = this.tryMatch(p, w, fuzzyOk && !hitCurrent);
         if (tIdx >= 0) {
           matchedAny = true;
-          // only count as forward evidence when the word could NOT be
-          // part of the current phrase (defeats repeated-line rushing)
-          if (!hitCurrent && this.phrases[p].contentIdx.includes(tIdx)) {
-            this.fresh.set(p, (this.fresh.get(p) ?? 0) + 1);
+          lastWordMatched = true;
+          if (this.phrases[p].contentIdx.includes(tIdx)) {
+            if (!hitCurrent) contentHits++;
+            // only count as forward evidence when the word could NOT be
+            // part of the current phrase (defeats repeated-line rushing)
+            if (!hitCurrent) {
+              this.fresh.set(p, (this.fresh.get(p) ?? 0) + 1);
+            }
           }
         }
       }
@@ -444,7 +469,7 @@ export class PhraseMatcher {
         }
       }
     }
-    return { events, matchedAny, finished: this.finished };
+    return { events, matchedAny, finished: this.finished, contentHits, lastWordMatched };
   }
 
   /**
@@ -456,6 +481,24 @@ export class PhraseMatcher {
     const events: MatchEvent[] = [];
     const evidence = this.unambiguousEvidence(this.current + 1);
     this.advanceTo(this.current + 1, 'advance', 'self-heal', evidence, events);
+    return events[0];
+  }
+
+  /**
+   * Predictive advance (Flow mode). The phrase's unspoken tail is
+   * expected momentarily — absorb its late arrival via leftover.
+   * Never predicts the finish: the last phrase completes on evidence.
+   */
+  flowAdvance(): MatchEvent | null {
+    if (this.finished || this.current + 1 >= this.phrases.length) return null;
+    const events: MatchEvent[] = [];
+    const ph = this.phrases[this.current];
+    const set = this.matched.get(this.current);
+    this.leftover = ph.tokens.filter((_, t) => !set?.has(t));
+    this.advanceTo(
+      this.current + 1, 'advance', 'flow-predict',
+      this.contentMatchedCount(this.current), events,
+    );
     return events[0];
   }
 
@@ -473,5 +516,12 @@ export class PhraseMatcher {
 
   get length(): number {
     return this.phrases.length;
+  }
+
+  /** Whether any word matched the current phrase WHILE it was current.
+      Flow prediction requires it — a phrase confirmed purely by banked
+      lookahead credit is not one the speaker has demonstrably entered. */
+  get touched(): boolean {
+    return this.touchedCurrent;
   }
 }

@@ -19,8 +19,9 @@ export interface Settings {
   diagOverlay: boolean; // diagnostics overlay on the prompter
   voiceStart: boolean;  // armed mode auto-starts on first phrase heard
   /** Lead: swap when all but the final content word is in (default).
-      Confirm: swap only on phrase completion. */
-  swapTiming: 'lead' | 'confirm';
+      Confirm: swap only on phrase completion. Flow: lead rules plus a
+      pace-model predictive swap (experimental, off until A/B). */
+  swapTiming: 'lead' | 'confirm' | 'flow';
   /** Next-phrase preview opacity (eye-voice span legibility). */
   previewOpacity: number;
   /** Speech engine: web (Safari API) or native (iPad app, on-device). */
@@ -77,11 +78,11 @@ export async function loadSessionLogs(): Promise<unknown[]> {
  * touched; re-running is a no-op thanks to the flag).
  */
 export async function seedRigScripts(seeds: Script[]): Promise<void> {
-  // v4: adds "próprio" to the PT alias demo (first native rig tape,
-  // t=54787). Upserts by id so updates reach devices seeded earlier
-  // (the two rig-test scripts are fixtures; local edits to them are
+  // v5: adds "promotor" to the PT alias demo (B.3 tape, t=55681).
+  // Upserts by id so updates reach devices seeded earlier (the two
+  // rig-test scripts are fixtures; local edits to them are
   // intentionally replaced).
-  const FLAG = 'seeded_rigtest_v4';
+  const FLAG = 'seeded_rigtest_v5';
   if (await db.getItem(FLAG)) return;
   const scripts = await loadScripts();
   for (const seed of seeds) {

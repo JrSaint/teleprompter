@@ -11,6 +11,11 @@ export interface DiagSnapshot {
   /** ms from the triggering word's AUDIO time to the painted swap —
       only the native engine can provide this (word timestamps). */
   speechToSwap: number[];
+  /** mouth→emission lag per token, ms (segment timestamps). */
+  emissionLag: number[];
+  /** rough voice-onset→first-token lag, ms (VAD fallback when
+      segment timings are zeroed). */
+  vadLag: number[];
   /** native engine environment report (device/engine/locales) */
   env: string;
   /** last reported mic input level, 0–100 (native engine, ~1Hz) */
@@ -28,6 +33,8 @@ class Diagnostics {
     restartGaps: [],
     advanceLatencies: [],
     speechToSwap: [],
+    emissionLag: [],
+    vadLag: [],
     env: '',
     level: -1,
     log: [],
@@ -50,6 +57,8 @@ class Diagnostics {
       restartGaps: [...this.state.restartGaps],
       advanceLatencies: [...this.state.advanceLatencies],
       speechToSwap: [...this.state.speechToSwap],
+      emissionLag: [...this.state.emissionLag],
+      vadLag: [...this.state.vadLag],
       env: this.state.env,
       level: this.state.level,
       log: [...this.state.log],
@@ -94,10 +103,23 @@ class Diagnostics {
     this.push();
   }
 
+  emissionLag(ms: number): void {
+    this.state.emissionLag.push(Math.round(ms));
+    if (this.state.emissionLag.length > MAX_KEPT) this.state.emissionLag.shift();
+    this.push();
+  }
+
+  vadLag(ms: number): void {
+    this.state.vadLag.push(Math.round(ms));
+    if (this.state.vadLag.length > MAX_KEPT) this.state.vadLag.shift();
+    this.push();
+  }
+
   reset(): void {
     this.state = {
       restartCount: 0, restartGaps: [], advanceLatencies: [],
-      speechToSwap: [], env: '', level: -1, log: [],
+      speechToSwap: [], emissionLag: [], vadLag: [],
+      env: '', level: -1, log: [],
     };
     this.push();
   }
@@ -110,4 +132,11 @@ export function median(xs: number[]): number {
   const s = [...xs].sort((a, b) => a - b);
   const mid = Math.floor(s.length / 2);
   return s.length % 2 ? s[mid] : Math.round((s[mid - 1] + s[mid]) / 2);
+}
+
+/** 90th percentile (nearest-rank). */
+export function p90(xs: number[]): number {
+  if (xs.length === 0) return 0;
+  const s = [...xs].sort((a, b) => a - b);
+  return s[Math.max(0, Math.ceil(s.length * 0.9) - 1)];
 }

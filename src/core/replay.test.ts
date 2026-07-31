@@ -263,6 +263,193 @@ describe('fixture pt-native (B.2 close-out tape)', () => {
   });
 });
 
+/* B.3 tapes: recognizer path with per-word streaming, recorded on the
+   close-out build — replay reproduces the recorded decisions
+   move-for-move (verified at save time). These pin the sprint's wins
+   and the Flow-mode rails. */
+import enB3 from './fixtures/rigtest-en-b3-2026-07-31.json';
+import ptB3 from './fixtures/rigtest-pt-b3-2026-07-31.json';
+
+describe('fixture en-b3 (B.3 tape)', () => {
+  const log = enB3 as unknown as SessionLog;
+  const r = replaySession(log);
+
+  it('far-skips the red line and leads the pick-up boundary — the previously misfiring pair', () => {
+    const skip = r.moves.find((m) => m.rule === 'far-skip');
+    expect(skip?.t).toBe(110780);
+    expect(skip?.to).toBe(29);
+    expect(skip?.evidence).toBe(3);
+    const pickUp = r.moves.find((m) => m.t === 110796);
+    expect(pickUp?.rule).toBe('lead');
+    expect(pickUp?.to).toBe(30);
+  });
+
+  it('"the end" is emitted and matched (final-exact at t=114392)', () => {
+    const m = r.moves.find((x) => x.t === 114392);
+    expect(m?.rule).toBe('final-exact');
+    expect(m?.to).toBe(32);
+  });
+
+  it('re-emission batches and both quiet stretches advance nothing', () => {
+    const batchTimes = [59168, 70304, 99054, 101008];
+    for (const m of r.moves) expect(batchTimes).not.toContain(m.t);
+    // weather improv (t≈74200–75580) and the red-line pause + off-
+    // script ad-lib (silence 99082–107781, "Then what happens next…")
+    expect(r.moves.filter((m) => m.t > 73400 && m.t < 76297)).toEqual([]);
+    expect(r.moves.filter((m) => m.t > 98800 && m.t < 110780)).toEqual([]);
+  });
+
+  it('finishes with every move evidenced', () => {
+    expect(r.finished).toBe(true);
+    for (const m of r.moves) expect(m.evidence).toBeGreaterThanOrEqual(1);
+  });
+});
+
+describe('fixture pt-b3 (B.3 tape)', () => {
+  const log = ptB3 as unknown as SessionLog;
+  const r = replaySession(log);
+
+  it('alias fires on "Pro": lead completes the prompter phrase on its first word (t=55046)', () => {
+    const m = r.moves.find((x) => x.t === 55046);
+    expect(m?.rule).toBe('lead');
+    expect(m?.to).toBe(23);
+    expect(m?.evidence).toBe(1);
+  });
+
+  it('far-skip over the red line, evidence-backed', () => {
+    const skip = r.moves.find((m) => m.rule === 'far-skip');
+    expect(skip?.t).toBe(73641);
+    expect(skip?.to).toBe(31);
+    expect(skip?.evidence).toBe(3);
+  });
+
+  it('re-emission batches and both quiet stretches advance nothing', () => {
+    const batchTimes = [38212, 38527, 40631, 41662, 54821, 59876];
+    for (const m of r.moves) expect(batchTimes).not.toContain(m.t);
+    // comida improv (t≈43840–45234) and the red-line pause
+    expect(r.moves.filter((m) => m.t > 42145 && m.t < 46647)).toEqual([]);
+    expect(r.moves.filter((m) => m.t > 69451 && m.t < 73017)).toEqual([]);
+  });
+
+  it('finishes with every move evidenced', () => {
+    expect(r.finished).toBe(true);
+    for (const m of r.moves) expect(m.evidence).toBeGreaterThanOrEqual(1);
+  });
+});
+
+/* Flow-mode rails on the real B.3 tapes: prediction must add nothing
+   during ad-libs or the red-line pause, and the far-skips are
+   untouched. */
+describe.each([
+  ['en-b3', enB3 as unknown as SessionLog, 110780, [
+    [73400, 76297], [98800, 110780],
+  ]],
+  ['pt-b3', ptB3 as unknown as SessionLog, 73641, [
+    [42145, 46647], [69451, 73017],
+  ]],
+] as const)('flow replay rails: %s', (_name, log, skipT, windows) => {
+  const flow = replaySession(log, {}, { flowPredict: true });
+
+  it('zero flow-predict advances in the ad-lib and pause windows', () => {
+    const predicted = flow.moves.filter((m) => m.rule === 'flow-predict');
+    for (const [a, b] of windows) {
+      expect(predicted.filter((m) => m.t > a && m.t < b)).toEqual([]);
+    }
+  });
+
+  it('far-skip unchanged; finishes; any prediction is evidenced and never chains', () => {
+    const skip = flow.moves.find((m) => m.rule === 'far-skip');
+    expect(skip?.t).toBe(skipT);
+    expect(flow.finished).toBe(true);
+    const predicted = flow.moves.filter((m) => m.rule === 'flow-predict');
+    for (const m of predicted) expect(m.evidence).toBeGreaterThanOrEqual(1);
+    // no two consecutive flow-predicts (one-beyond-evidence rail)
+    for (let i = 1; i < flow.moves.length; i++) {
+      if (flow.moves[i].rule === 'flow-predict') {
+        expect(flow.moves[i - 1].rule).not.toBe('flow-predict');
+      }
+    }
+  });
+});
+
+/* Flow-mode synthetic: the positive path and the rails the real tapes
+   don't reach. */
+describe('flow replay synthetic', () => {
+  const body =
+    'Alpha bravo charlie delta echo. Foxtrot golf hotel india. Juliet kilo lima mike.';
+  const flowLog = (events: SessionEvent[]): SessionLog => ({
+    version: 1, id: 'flow-fixture', startedAtIso: '2026-07-31T00:00:00Z',
+    script: { title: 'flow', lang: 'en-US', body },
+    swapTiming: 'flow',
+    events,
+  });
+  const at = (t: number, word: string): SessionEvent =>
+    ({ t, kind: 'token', word, final: false });
+
+  it('predicts the swap when the engine goes quiet mid-phrase at a learned pace', () => {
+    // Phrases: "Alpha bravo charlie" / "delta echo." / "Foxtrot golf
+    // hotel india." / "Juliet kilo lima mike." Confirmed-content gaps
+    // are 300,600,600,300ms (lead-absorbed leftovers don't sample) →
+    // median rate 450ms. Phrase 2 stops at 2/4 content — prediction
+    // fires at lastContent 2100 + 2 remaining × 450ms = 3000.
+    const r = replaySession(flowLog([
+      at(300, 'alpha'), at(600, 'bravo'), at(900, 'charlie'), at(1200, 'delta'),
+      at(1500, 'echo'), // leftover of the lead advance at 1200
+      at(1800, 'foxtrot'), at(2100, 'golf'),
+      at(6000, 'india'), // arrives long after — lets the sim evaluate
+    ]));
+    const p = r.moves.find((m) => m.rule === 'flow-predict');
+    expect(p?.to).toBe(3);
+    expect(p?.t).toBe(3000);
+    expect(p?.evidence).toBe(2);
+  });
+
+  it('an unmatched token suspends prediction until evidence resumes', () => {
+    const r = replaySession(flowLog([
+      at(300, 'alpha'), at(600, 'bravo'), at(900, 'charlie'), at(1200, 'delta'),
+      at(1500, 'echo'),
+      at(1800, 'foxtrot'), at(2100, 'golf'),
+      at(2300, 'zeppelin'), // off-script — suspend
+      at(6000, 'wombat'),
+    ]));
+    expect(r.moves.some((m) => m.rule === 'flow-predict')).toBe(false);
+  });
+
+  it('never fires inside a mic-off stretch (stop/re-arm mirrors the live timer clear)', () => {
+    // window matures at 3000 (rate 450 × 2 remaining after golf@2100),
+    // but the mic stopped at 2200 — live cleared the pending timer, so
+    // replay must not date a swap inside the dead stretch either
+    const r = replaySession(flowLog([
+      at(300, 'alpha'), at(600, 'bravo'), at(900, 'charlie'), at(1200, 'delta'),
+      at(1500, 'echo'),
+      at(1800, 'foxtrot'), at(2100, 'golf'),
+      { t: 2200, kind: 'mic', status: 'stopped' },
+      { t: 60000, kind: 'mic', status: 'listening' },
+      at(60300, 'hotel'),
+    ]));
+    expect(r.moves.some((m) => m.rule === 'flow-predict')).toBe(false);
+  });
+
+  it('a slow pace whose projection lands inside the hold window never predicts', () => {
+    // 1400ms/word, 5-content phrase stopped at 3/5: projection is
+    // 2 remaining × 1400 = 2800ms past the last match — beyond the
+    // 2500ms hold window, so that silence is a hold, not missed speech
+    const slowBody = 'Alpha bravo charlie delta echo. Zip zap zop zug zem.';
+    const r = replaySession({
+      version: 1, id: 'flow-slow', startedAtIso: '2026-07-31T00:00:00Z',
+      script: { title: 'flow-slow', lang: 'en-US', body: slowBody },
+      swapTiming: 'flow',
+      events: [
+        at(1400, 'alpha'), at(2800, 'bravo'), at(4200, 'charlie'),
+        at(5600, 'delta'), at(7000, 'echo'),
+        at(8400, 'zip'), at(9800, 'zap'), at(11200, 'zop'),
+        at(30000, 'zug'),
+      ],
+    });
+    expect(r.moves.some((m) => m.rule === 'flow-predict')).toBe(false);
+  });
+});
+
 /* Real rig-session fixtures: drop "Copy log" JSON into ./fixtures and
    every file is replayed against the regression contract. */
 const realFixtures = Object.entries(

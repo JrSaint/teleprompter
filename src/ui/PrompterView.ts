@@ -6,7 +6,7 @@ import { NativeSpeechSource } from '../core/speech/NativeSpeechSource';
 import { renderPhrase } from './render';
 import { fontPxForDistance } from './typography';
 import { holdWakeLock, releaseWakeLock } from './wakelock';
-import { diag, median, type DiagSnapshot } from '../core/diag';
+import { diag, median, p90, type DiagSnapshot } from '../core/diag';
 import type { FlowState } from '../core/flow';
 
 export interface PrompterViewHandle {
@@ -91,7 +91,13 @@ export function createPrompterView(
     if (d.speechToSwap.length > 0) {
       const s2s = d.speechToSwap;
       lines.splice(3, 0,
-        `speech→swap ms: last ${s2s[s2s.length - 1]} · med ${median(s2s)} (n=${s2s.length})`);
+        `speech→swap ms: last ${s2s[s2s.length - 1]} · med ${median(s2s)} · p90 ${p90(s2s)} (n=${s2s.length})`);
+    }
+    if (d.emissionLag.length > 0) {
+      lines.push(`emission ms: med ${median(d.emissionLag)} · p90 ${p90(d.emissionLag)} (n=${d.emissionLag.length})`);
+    }
+    if (d.vadLag.length > 0) {
+      lines.push(`voice→token ms (rough): med ${median(d.vadLag)} · p90 ${p90(d.vadLag)} (n=${d.vadLag.length})`);
     }
     if (d.level >= 0) {
       const bars = Math.round(Math.min(100, d.level) / 10);
@@ -127,7 +133,7 @@ export function createPrompterView(
       paintDiag(diag.snapshot());
     },
     onMic: (s, detail) => paintStatus(s, detail),
-  }, { leadMode: settings.swapTiming !== 'confirm' });
+  }, { mode: settings.swapTiming });
 
   const unsubDiag = diag.subscribe(paintDiag);
   diagEl.hidden = !settings.diagOverlay;

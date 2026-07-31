@@ -60,6 +60,23 @@ public class NativeSpeechPlugin: CAPPlugin, CAPBridgedPlugin {
     private var pendingListeningDetail: String?
     private var lastLevelEmitMs: Double = 0
 
+    // Anchor at actual audio flow: segment timestamps are relative to
+    // the audio the request has consumed, so the wallclock anchor must
+    // be the FIRST buffer appended to each request — not task spawn.
+    private var anchorPending = false
+
+    // Voice-activity onset detection (buffer resolution, ~21ms): after
+    // ≥600ms of quiet, the first sustained voiced buffers emit ONE
+    // "voice-onset" with the wallclock. The JS side correlates it with
+    // the next token arrival — the emission-lag fallback when the
+    // engine zeroes segment timings (observed on-device: every partial
+    // in the B.3 tapes carried no usable timestamp).
+    private static let vadVoiceRms: Float = 0.008
+    private static let vadQuietMinMs: Double = 600
+    private var vadQuietSinceMs: Double = 0
+    private var vadVoicedStreak = 0
+    private var vadArmed = false
+
     @objc func start(_ call: CAPPluginCall) {
         let (isDuplicate, seq): (Bool, Int) = stateQueue.sync {
             if active { return (true, startSeq) }
@@ -220,6 +237,14 @@ public class NativeSpeechPlugin: CAPPlugin, CAPBridgedPlugin {
         input.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak self] buffer, _ in
             guard let self = self else { return }
             self.onTapBuffer(buffer)
+            if self.request != nil {
+                self.meterLock.lock()
+                if self.anchorPending {
+                    self.anchorPending = false
+                    self.sessionStartEpochMs = Date().timeIntervalSince1970 * 1000
+                }
+                self.meterLock.unlock()
+            }
             self.request?.append(buffer)
         }
         audioEngine.prepare()
@@ -236,7 +261,19 @@ public class NativeSpeechPlugin: CAPPlugin, CAPBridgedPlugin {
         let req = SFSpeechAudioBufferRecognitionRequest()
         req.shouldReportPartialResults = true
         req.requiresOnDeviceRecognition = true
+        // B.3 engine levers: prompting is dictation-shaped, and
+        // punctuation insertion only adds latency and re-statements
+        req.taskHint = .dictation
+        if #available(iOS 16.0, *) { req.addsPunctuation = false }
         if !vocabulary.isEmpty { req.contextualStrings = vocabulary }
+        // Arm the anchor BEFORE publishing the request: the tap starts
+        // appending the moment `request` is non-nil, and the anchor
+        // must stamp that first appended buffer (the request's audio
+        // t=0), not a later one. Provisional value covers the gap.
+        meterLock.lock()
+        sessionStartEpochMs = Date().timeIntervalSince1970 * 1000
+        anchorPending = true
+        meterLock.unlock()
         request = req
         wordsThisSession = false
 
@@ -245,7 +282,6 @@ public class NativeSpeechPlugin: CAPPlugin, CAPBridgedPlugin {
             emitStatus("restart-gap", detail: String(Int(gap)))
             endedAtEpochMs = 0
         }
-        sessionStartEpochMs = Date().timeIntervalSince1970 * 1000
 
         task = recognizer.recognitionTask(with: req) { [weak self] result, error in
             guard let self = self, self.isActive else { return }
@@ -317,6 +353,7 @@ public class NativeSpeechPlugin: CAPPlugin, CAPBridgedPlugin {
     func reportLevel(rms: Float) {
         var announce: String?
         var emitLevel: Int?
+        var emitOnset: Double?
         let now = Date().timeIntervalSince1970 * 1000
         meterLock.lock()
         if let detail = pendingListeningDetail {
@@ -327,12 +364,33 @@ public class NativeSpeechPlugin: CAPPlugin, CAPBridgedPlugin {
             lastLevelEmitMs = now
             emitLevel = min(100, Int(rms * 300))
         }
+        // VAD onset: sustained sub-voice audio arms; two consecutive
+        // voiced buffers fire exactly one onset. Quiet is defined as
+        // "below the voice threshold" — the rig's room tone sits well
+        // above a strict silence floor (device tapes: ambience at
+        // level 1–2), and a separate quiet band silently preserved
+        // arming credit through soft speech.
+        if rms < Self.vadVoiceRms {
+            vadVoicedStreak = 0
+            if vadQuietSinceMs == 0 { vadQuietSinceMs = now }
+            if now - vadQuietSinceMs >= Self.vadQuietMinMs { vadArmed = true }
+        } else {
+            vadQuietSinceMs = 0
+            vadVoicedStreak += 1
+            if vadArmed && vadVoicedStreak >= 2 {
+                vadArmed = false
+                emitOnset = now
+            }
+        }
         meterLock.unlock()
         if let announce = announce {
             DispatchQueue.main.async { self.emitStatus("listening", detail: announce) }
         }
         if let level = emitLevel {
             DispatchQueue.main.async { self.emitStatus("level", detail: String(level)) }
+        }
+        if let onset = emitOnset {
+            DispatchQueue.main.async { self.emitStatus("voice-onset", detail: String(Int(onset))) }
         }
     }
 
@@ -347,11 +405,15 @@ public class NativeSpeechPlugin: CAPPlugin, CAPBridgedPlugin {
     // MARK: - shared emission (also used by the analyzer engine)
 
     func emitWords(_ words: [String], ends: [Double], isFinal: Bool, engine: String) {
+        // the audio thread owns anchor writes — read under the lock
+        meterLock.lock()
+        let anchor = sessionStartEpochMs
+        meterLock.unlock()
         notifyListeners("words", data: [
             "words": words,
             "audioEndMs": ends,
             "isFinal": isFinal,
-            "sessionStartEpochMs": sessionStartEpochMs,
+            "sessionStartEpochMs": anchor,
             "engine": engine,
         ])
     }
@@ -373,7 +435,9 @@ public class NativeSpeechPlugin: CAPPlugin, CAPBridgedPlugin {
     }
 
     func setSessionStart(epochMs: Double) {
+        meterLock.lock()
         sessionStartEpochMs = epochMs
+        meterLock.unlock()
     }
 
     var currentVocabulary: [String] { vocabulary }
@@ -391,6 +455,10 @@ public class NativeSpeechPlugin: CAPPlugin, CAPBridgedPlugin {
         stateQueue.sync { active = false }
         meterLock.lock()
         pendingListeningDetail = nil
+        anchorPending = false
+        vadQuietSinceMs = 0
+        vadVoicedStreak = 0
+        vadArmed = false
         meterLock.unlock()
         task?.cancel()
         task = nil

@@ -164,6 +164,7 @@ export function createSetupView(
         <select id="set-swap">
           <option value="lead" ${settings.swapTiming === 'lead' ? 'selected' : ''}>Lead (early swap)</option>
           <option value="confirm" ${settings.swapTiming === 'confirm' ? 'selected' : ''}>Confirm (on completion)</option>
+          <option value="flow" ${settings.swapTiming === 'flow' ? 'selected' : ''}>Flow (predicts from your pace — experimental)</option>
         </select></label>
       <label class="su-row"><span>Preview brightness <b>${Math.round(settings.previewOpacity * 100)}%</b></span>
         <input type="range" id="set-preview" min="30" max="80" step="5" value="${Math.round(settings.previewOpacity * 100)}"></label>
@@ -200,7 +201,7 @@ export function createSetupView(
       void persistSettings();
     };
     (card.querySelector('#set-swap') as HTMLSelectElement).onchange = (e) => {
-      settings.swapTiming = (e.target as HTMLSelectElement).value as 'lead' | 'confirm';
+      settings.swapTiming = (e.target as HTMLSelectElement).value as 'lead' | 'confirm' | 'flow';
       void persistSettings();
     };
     (card.querySelector('#set-preview') as HTMLInputElement).oninput = (e) => {

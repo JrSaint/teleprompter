@@ -16,6 +16,15 @@ told the reader to improvise about "o tempo" while itself containing
 "como o tempo por uns oito segundos". The v2 seeds change the suggested
 topic to "comida" (zero lexical overlap).
 
+Known annotation — B.3 tapes (rigtest-en-b3 / rigtest-pt-b3,
+2026-07-31): recorded on the close-out build — replay reproduces the
+recorded decision stream move-for-move. They carry the phrases list
+but NO speechToSwapMs/summary despite that wiring being live: the
+device recognizer returned zeroed segment timings for every partial —
+the finding that drove the B.3 emission-lag fallback (VAD voice-onset
+correlation). Unmatched ad-lib stretches (EN t=107781–109184) logged
+no decisions on this build; B.3 logs a hold for every batch.
+
 Known annotation — B.2 close-out tapes (rigtest-en-native /
 rigtest-pt-native, 2026-07-31): first working on-device recognizer
 sessions (iPad12,1, per-word streaming). The EN tape recorded the

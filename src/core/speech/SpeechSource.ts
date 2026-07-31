@@ -15,9 +15,13 @@ export type SpeechStatus =
   | 'unavailable'
   | 'error'
   // side-channel events (native engine): environment report at session
-  // start; ~1Hz microphone level while active. Not mic-state changes.
+  // start; ~1Hz microphone level while active; voice-activity onset
+  // (buffer-resolution, epoch ms in detail) after a quiet stretch —
+  // the emission-lag fallback when segment timings are zeroed.
+  // Not mic-state changes.
   | 'env'
-  | 'level';
+  | 'level'
+  | 'voice-onset';
 
 /** Extra per-batch data from engines that can provide it (native). */
 export interface WordsMeta {
@@ -27,6 +31,10 @@ export interface WordsMeta {
   /** The session audio start on the performance.now() timeline, so
       audio times convert to wallclock: spoken = anchor + audioEndMs. */
   audioAnchorMs?: number;
+  /** Per-word mouth→emission lag, ms (arrival wall minus spoken-end
+      wall). Null where the engine gave no usable timestamp — on-device
+      partials often report zeroed segment timings. */
+  emissionLagMs?: Array<number | null>;
 }
 
 export interface SpeechSource {

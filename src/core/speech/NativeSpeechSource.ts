@@ -84,13 +84,27 @@ export class NativeSpeechSource implements SpeechSource {
         });
         const prefix = stablePrefixLength(this.emitted, words);
         const fresh = words.slice(prefix);
+        // A revision re-emits the transcript's unchanged tail as
+        // "fresh" with its ORIGINAL audio times — lag computed from
+        // those is re-statement age, not engine latency. Only pure
+        // appends measure.
+        const pureAppend = prefix === this.emitted.length;
         this.emitted = words;
         if (fresh.length === 0) return;
         // audio anchor mapped onto the performance.now() timeline
+        const arrival = performance.now();
         const audioAnchorMs = e.sessionStartEpochMs - performance.timeOrigin;
+        const freshEnds = ends.slice(prefix);
+        // mouth→emission lag per token — the engine-latency
+        // distribution, independent of any swap rule. Null where the
+        // segment timing is zeroed (on-device partials often are).
+        const emissionLagMs = freshEnds.map((end) =>
+          pureAppend && end > 0 ? Math.round(arrival - (audioAnchorMs + end)) : null,
+        );
         this.onWords?.(fresh, e.isFinal, {
-          audioEndMs: ends.slice(prefix),
+          audioEndMs: freshEnds,
           audioAnchorMs,
+          emissionLagMs,
         });
       }),
       await NativeSpeech.addListener('status', (e) => {

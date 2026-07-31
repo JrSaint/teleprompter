@@ -37,7 +37,7 @@ The screen stayed with you the whole way through. Check the numbers in the corne
     // manual patch that trails reality — native contextualStrings
     // priming biases but does not guarantee (B.2 tape: primed AND
     // still mangled).
-    aliases: 'prompter: peter, pro, pt, professor, pou, próprio',
+    aliases: 'prompter: peter, pro, pt, professor, pou, próprio, promotor',
     body: `Este é o teste de sessenta segundos. Leia cada linha no seu ritmo normal, e as palavras vão seguir você.
 
 Cada frase aparece grande no centro, com a próxima esperando embaixo. Nada fica rolando nesta tela. Ela só avança quando você fala.
