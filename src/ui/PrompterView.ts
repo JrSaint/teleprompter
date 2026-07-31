@@ -15,6 +15,11 @@ export interface PrompterViewHandle {
   dispose(): void;
 }
 
+/** Swap crossfade: brightness eases over this long, both directions.
+    Tunable 100–250ms. Light moves, text doesn't — position never
+    animates on the prompter screen (design law). */
+const SWAP_FADE_MS = 150;
+
 /**
  * The rig display. One phrase large and centered, the next dimmed
  * below as preview. Swaps are instant — no scrolling, no animation.
@@ -83,6 +88,15 @@ export function createPrompterView(
   window.addEventListener('resize', applySize);
   nextEl.style.opacity = String(settings.previewOpacity);
 
+  /** Ease an element's brightness from → to over SWAP_FADE_MS. */
+  const fadeTo = (elm: HTMLElement, from: string, to: string) => {
+    elm.style.transition = 'none';
+    elm.style.opacity = from;
+    void elm.offsetWidth; // commit the start value before easing
+    elm.style.transition = `opacity ${SWAP_FADE_MS}ms ease`;
+    elm.style.opacity = to;
+  };
+
   let flowState: FlowState = 'idle';
   let phraseIndex = 0;
 
@@ -135,6 +149,7 @@ export function createPrompterView(
     settings.engine === 'native' ? new NativeSpeechSource() : new WebSpeechSource();
   const controller = new PrompterController(script, phrases, speech, {
     onPhrase: (cur, nxt, i) => {
+      const swapped = i !== phraseIndex;
       phraseIndex = i;
       const finished = cur === null;
       doneEl.hidden = !finished;
@@ -142,6 +157,13 @@ export function createPrompterView(
       nextEl.hidden = finished;
       renderPhrase(curEl, cur);
       renderPhrase(nextEl, nxt);
+      // Crossfade: the entering line eases dim→bright, the incoming
+      // preview eases dark→dim. Brightness only — no positional
+      // animation, ever (design law: light moves, text doesn't).
+      if (swapped && !finished) {
+        fadeTo(curEl, String(settings.previewOpacity), '1');
+        fadeTo(nextEl, '0', String(settings.previewOpacity));
+      }
       paintStatus();
     },
     onFlow: (s) => {
