@@ -8,7 +8,8 @@ shell with a custom Swift NativeSpeech plugin. Tests: `npx vitest run`.
 ## Design laws (locked — do not revisit)
 
 - **Light moves, text doesn't.** No feature may animate text position
-  on the prompter screen. Swaps are instant repositions; the only
+  on the prompter screen. Text sits in fixed slots (karaoke: 2,
+  ladder: 3) and the line being read brightens IN PLACE; the only
   permitted transition is brightness (opacity), e.g. the swap
   crossfade (`SWAP_FADE_MS` in `src/ui/PrompterView.ts`). Never
   scroll, slide, or zoom prompter text.
@@ -34,9 +35,12 @@ shell with a custom Swift NativeSpeech plugin. Tests: `npx vitest run`.
 ## Backlog
 
 - **Word-sweep brightening** (B.3.2 item 2, deferred as not-cheap):
-  within a two-slot karaoke display (also unbuilt, fallback-only),
-  brighten the line being read word-by-word as tokens confirm.
-  Needs per-word matched-state surfaced from the matcher to the
-  display plus a "Line vs Word" brightening setting. Revisit after
-  the Lead-vs-Flow A/B picks a swap timing.
+  within the (now built) karaoke display, brighten the line being
+  read word-by-word as tokens confirm. Needs per-word matched-state
+  surfaced from the matcher to the display plus a "Line vs Word"
+  brightening setting. Revisit after the display + timing A/Bs.
+- **NativeSpeechPlugin sync consolidation** (B.3.3 review debt): the
+  plugin has three synchronization domains (stateQueue, meterLock,
+  unsynchronized session objects across four threads). Fold
+  request/task/recognizer/failure state into one serial authority.
 - Locked-lines verified verbatim via the generic `{tag:text}` markup.
