@@ -3,7 +3,8 @@ import { PhraseMatcher, type MatchEvent } from '../core/matcher';
 import { Flow, type FlowState } from '../core/flow';
 import type { SpeechSource, SpeechStatus } from '../core/speech/SpeechSource';
 import { diag, median, p90 } from '../core/diag';
-import { FlightRecorder, type SessionEvent } from '../core/recorder';
+import { FlightRecorder, type SessionEvent, type SessionHeader } from '../core/recorder';
+import { LagSampler, STALE_SAMPLE_MS, BATCH_MIN_TOKENS } from '../core/latency';
 import { FlowModel, FLOW_HOLD_MS } from '../core/flowpredict';
 import { saveSessionLog } from '../store/db';
 import { parseAliases } from '../core/aliases';
@@ -16,9 +17,10 @@ const HOLD_AFTER_MS = FLOW_HOLD_MS;
 const GRACE_MS = 2000;
 /** Stall self-heal: holding at least this long with next-phrase evidence. */
 const HEAL_AFTER_MS = 4000;
-/** Visible dwell per phrase when one result clump crosses several
-    boundaries — step through them, never jump-cut. */
-const STEP_DWELL_MS = 180;
+/** Minimum visible dwell per phrase — within one clump AND across
+    feeds (B.3.3 finding 4: back-to-back advances 166–500ms apart read
+    as a lurch). Display stepping only; decision logs are unchanged. */
+const STEP_DWELL_MS = 250;
 /** Throttled autosave of the in-flight session log. */
 const AUTOSAVE_MS = 5000;
 
@@ -61,12 +63,14 @@ export class PrompterController {
       summarized into the log when the mic stops. */
   private s2sSamples: number[] = [];
   private emissionSamples: number[] = [];
-  private vadSamples: number[] = [];
-  /** Pending voice-onset wallclock awaiting its first token arrival. */
-  private pendingOnsetWall: number | null = null;
-  /** Last token-batch arrival — onsets during active token flow are
-      mid-speech artifacts, not silence breaks. */
-  private lastTokenArrival = -Infinity;
+  /** Onset↔token correlation with full accounting (core/latency.ts) —
+      the metric must say why n is low, never silently read 0. */
+  private vadSampler = new LagSampler();
+  private s2sInvalid = 0;
+  /** Bumped when a stretch's summary is emitted: a paint-frame sample
+      from a closed stretch is discarded, never leaked into the next
+      (verify finding: the finished advance's rAF lands post-summary). */
+  private stretchSeq = 0;
 
   /** Flow mode: predictive swap machinery. */
   private flowEnabled = false;
@@ -81,7 +85,7 @@ export class PrompterController {
     phrases: Phrase[],
     speech: SpeechSource,
     ev: ControllerEvents,
-    opts: { mode?: 'lead' | 'confirm' | 'flow' } = {},
+    opts: { mode?: 'lead' | 'confirm' | 'flow'; header?: SessionHeader } = {},
   ) {
     this.phrases = phrases;
     const mode = opts.mode ?? 'lead';
@@ -114,13 +118,20 @@ export class PrompterController {
       // index → text; decisions are index-only and unanalyzable
       // after the fact without the list the session actually used
       phrases: phrases.map((p) => p.text),
+      // render facts (display mode, brightness, computed font px…) —
+      // the tape must prove what was on screen, not assume it
+      header: opts.header,
     });
     this.saveTimer = setInterval(() => this.persistLog(), AUTOSAVE_MS);
 
     this.flow.onChange = (s) => {
       this.recorder.state(s);
-      if (s === 'holding') this.scheduleHeal();
-      else this.cancelHeal();
+      if (s === 'holding') {
+        this.scheduleHeal();
+        // a hold means the silence was an ad-lib/pause — the pending
+        // onset would pair with whatever token ends it: not latency
+        this.vadSampler.hold();
+      } else this.cancelHeal();
       this.ev.onFlow(s);
     };
 
@@ -140,17 +151,15 @@ export class PrompterController {
       }
       if (s === 'voice-onset') {
         // buffer-resolution voice-activity onset (epoch ms) — the
-        // emission-lag fallback: correlated with the next token
-        // arrival when segment timestamps are zeroed. Onsets landing
-        // while tokens are still flowing are mid-speech energy dips
-        // resolving, not a silence break — discard them.
+        // emission-lag fallback: correlated with the next fresh token
+        // arrival when segment timestamps are zeroed. EVERY onset
+        // opens (or refreshes) the pending sample — the old "only
+        // after 1200ms of token silence" guard discarded 8 of the EN
+        // tape's 10 onsets (B.3.3 finding 2).
         this.recorder.mic('voice-onset', detail);
         const epoch = Number(detail);
-        if (
-          Number.isFinite(epoch) &&
-          performance.now() - this.lastTokenArrival > 1200
-        ) {
-          this.pendingOnsetWall = epoch - performance.timeOrigin;
+        if (Number.isFinite(epoch)) {
+          this.vadSampler.onset(epoch - performance.timeOrigin);
         }
         return;
       }
@@ -160,7 +169,7 @@ export class PrompterController {
       // invalidates any onset awaiting correlation
       if (s === 'restarting') {
         this.wasRestarting = true;
-        this.pendingOnsetWall = null;
+        this.vadSampler.restart();
       }
       else if (s === 'listening' && this.wasRestarting) {
         this.wasRestarting = false;
@@ -183,22 +192,27 @@ export class PrompterController {
       const lag = meta?.emissionLagMs?.[i];
       this.recorder.token(w, isFinal, lag ?? undefined);
       // belt against clock-skew/revision artifacts the source missed
-      if (lag !== null && lag !== undefined && lag >= 0 && lag < 5000) {
+      if (lag !== null && lag !== undefined && lag >= 0 && lag <= STALE_SAMPLE_MS) {
         this.emissionSamples.push(lag);
         diag.emissionLag(lag);
       }
     });
-    // VAD fallback: correlate the latest quiet→voice onset with this
-    // (first-after-onset) token arrival — a rough emission lag
-    if (this.pendingOnsetWall !== null) {
-      const lag = Math.round(t0 - this.pendingOnsetWall);
-      this.pendingOnsetWall = null;
-      if (lag > 0 && lag < 4000) {
-        this.vadSamples.push(lag);
-        diag.vadLag(lag);
-      }
+    // VAD fallback: correlate the latest quiet→voice onset with the
+    // first FRESH token arrival — a rough emission lag. Tokens inside
+    // a re-emission batch (≥4 sharing one arrival) never close a
+    // sample, and a pair further apart than 3s is stale re-statement
+    // age, not engine latency — counted and excluded, never reported.
+    // A re-emission batch: the source says so directly (pureAppend
+    // false), or — when the source can't tell — ≥4 tokens at one
+    // arrival. A legitimate long pure append still closes samples.
+    const isBatch =
+      meta?.pureAppend !== undefined
+        ? !meta.pureAppend
+        : words.length >= BATCH_MIN_TOKENS;
+    {
+      const lag = this.vadSampler.tokens(t0, isBatch);
+      if (lag !== null) diag.vadLag(lag);
     }
-    this.lastTokenArrival = t0;
 
     const from = this.matcher.current;
     // Snapshot BEFORE the feed: a decision's curPct must describe the
@@ -260,24 +274,33 @@ export class PrompterController {
       // the true speech-to-swap: triggering word's audio time vs paint.
       // SFSpeechRecognizer partial results can carry zero timestamps
       // until finalization — a 0 audio time would poison the metric
+      // A re-emission batch's audio times are re-statement history —
+      // an advance IT triggers must not sample speech-to-swap (the PT
+      // tape's 11189ms "pair" spanned the red-line pause via a batch).
       const lastAudioEnd =
         meta?.audioEndMs?.length ? meta.audioEndMs[meta.audioEndMs.length - 1] : 0;
       const spokenWall =
-        lastAudioEnd > 0 && meta?.audioAnchorMs !== undefined
+        !isBatch && lastAudioEnd > 0 && meta?.audioAnchorMs !== undefined
           ? meta.audioAnchorMs + lastAudioEnd
           : null;
+      const stretch = this.stretchSeq;
       requestAnimationFrame(() =>
         requestAnimationFrame(() => {
+          if (stretch !== this.stretchSeq) return; // stretch closed
           const paint = performance.now();
           diag.advanceLatency(paint - t0);
           if (spokenWall !== null) {
             const ms = Math.round(paint - spokenWall);
-            diag.speechToSwap(ms);
-            this.s2sSamples.push(ms);
-            // patch the metric onto this batch's decision events —
-            // the log is serialized later, so the reference sticks
-            for (const r of recorded) {
-              if (r?.kind === 'decision') r.speechToSwapMs = ms;
+            if (ms > 0 && ms <= STALE_SAMPLE_MS) {
+              diag.speechToSwap(ms);
+              this.s2sSamples.push(ms);
+              // patch the metric onto this batch's decision events —
+              // the log is serialized later, so the reference sticks
+              for (const r of recorded) {
+                if (r?.kind === 'decision') r.speechToSwapMs = ms;
+              }
+            } else {
+              this.s2sInvalid++;
             }
           }
         }),
@@ -290,11 +313,21 @@ export class PrompterController {
     }
   }
 
-  /* --- clump stepping: never jump-cut past a phrase ---------------- */
+  /* --- clump stepping: never jump-cut past a phrase, and never lurch
+     — every displayed phrase gets ≥STEP_DWELL_MS on screen, whether
+     the advances came in one clump or in back-to-back feeds ---------- */
+  private lastStepAt = -Infinity;
+
   private pushSteps(events: MatchEvent[], finished: boolean): void {
     for (const e of events) this.stepQueue.push(e.to);
     if (finished) this.stepQueue.push('end');
-    if (!this.stepTimer) this.drainSteps();
+    if (this.stepTimer) return;
+    const wait = this.lastStepAt + STEP_DWELL_MS - performance.now();
+    if (wait > 0) {
+      this.stepTimer = setTimeout(() => this.drainSteps(), wait);
+    } else {
+      this.drainSteps();
+    }
   }
 
   private drainSteps(): void {
@@ -303,6 +336,7 @@ export class PrompterController {
       this.stepTimer = null;
       return;
     }
+    this.lastStepAt = performance.now();
     this.renderAt(next);
     if (this.stepQueue.length === 0) {
       this.stepTimer = null;
@@ -462,40 +496,49 @@ export class PrompterController {
     if (toIdle && this.flow.state !== 'finished') this.flow.to('idle');
     if (this.flowTimer) clearTimeout(this.flowTimer);
     this.flowTimer = null;
-    this.pendingOnsetWall = null; // an onset never outlives its stretch
+    this.vadSampler.restart(); // an onset never outlives its stretch
     // one metric summary per listening stretch — THE numbers this
-    // phase exists to produce. Emission lag prefers real segment
-    // timestamps; the VAD-onset correlation is the rough fallback
-    // when the engine zeroes them.
-    if (this.s2sSamples.length + this.emissionSamples.length + this.vadSamples.length > 0) {
-      const lag =
-        this.emissionSamples.length > 0
-          ? {
-              count: this.emissionSamples.length,
-              medianMs: median(this.emissionSamples),
-              p90Ms: p90(this.emissionSamples),
-              source: 'segments' as const,
-            }
-          : this.vadSamples.length > 0
-            ? {
-                count: this.vadSamples.length,
-                medianMs: median(this.vadSamples),
-                p90Ms: p90(this.vadSamples),
-                source: 'vad-onset' as const,
-              }
-            : undefined;
+    // phase exists to produce. Emission lag reports the RICHER source
+    // (real segment timestamps vs the VAD-onset correlation), and a
+    // low sample count explains itself instead of reading as silence.
+    const seg = this.emissionSamples;
+    const vad = this.vadSampler.samples;
+    const lag =
+      seg.length >= vad.length && seg.length > 0
+        ? { count: seg.length, medianMs: median(seg), p90Ms: p90(seg), source: 'segments' as const }
+        : vad.length > 0
+          ? { count: vad.length, medianMs: median(vad), p90Ms: p90(vad), source: 'vad-onset' as const }
+          : undefined;
+    // invalidSamples documents ONLY stale onset↔token pairs; excluded
+    // speech-to-swap pairs are a different metric and ride with it
+    const invalidSamples = this.vadSampler.invalid;
+    const voidedByHold = this.vadSampler.voidedByHold;
+    const activity =
+      this.s2sSamples.length + seg.length + vad.length +
+      invalidSamples + voidedByHold;
+    if (activity > 0) {
+      const note =
+        (lag?.count ?? 0) < 8
+          ? `low n: ${voidedByHold} onsets voided by holds, ` +
+            `${invalidSamples} stale pairs excluded, ` +
+            `segment timestamps usable on ${seg.length} tokens`
+          : undefined;
       this.recorder.summary(
         {
           count: this.s2sSamples.length,
           medianMs: median(this.s2sSamples),
           p90Ms: p90(this.s2sSamples),
+          ...(this.s2sInvalid ? { invalid: this.s2sInvalid } : {}),
         },
         lag,
+        { invalidSamples, voidedByHold, note },
       );
       this.s2sSamples = [];
       this.emissionSamples = [];
-      this.vadSamples = [];
+      this.vadSampler.reset();
+      this.s2sInvalid = 0;
     }
+    this.stretchSeq++;
     this.persistLog();
   }
 

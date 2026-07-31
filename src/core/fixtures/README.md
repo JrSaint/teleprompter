@@ -37,3 +37,14 @@ replay of the same tokens produces the corrected sequence the
 regression tests pin. These tapes predate the phrase-list,
 speechToSwapMs, and summary log fields, and contain unsplit
 multi-word token strings ("test read") — replayed as recorded.
+
+## B.3.3 re-baseline (2026-07-31)
+
+Every fixture now carries a `phrases` header — the segmentation the
+session actually displayed. Tapes cut before B.3 lacked one, so it was
+backfilled from the v1 chunker (verbatim `events` untouched); replay
+uses the recorded list (`phraseFromText`), never fresh segmentation,
+so fixtures stay pinned to their own reality as the segmenter evolves.
+New tapes: `rigtest-en-b33-2026-07-31.json` / `rigtest-pt-b33-2026-07-31.json`
+(VAD onsets + summary events; the metric-sampler acceptance replays
+them in `latency.test.ts`).

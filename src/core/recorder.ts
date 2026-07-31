@@ -38,8 +38,8 @@ export type SessionEvent =
   | { t: number; kind: 'state'; state: string }
   | {
       t: number; kind: 'summary';
-      /** per listening stretch */
-      speechToSwap: { count: number; medianMs: number; p90Ms: number };
+      /** per listening stretch; `invalid` = excluded stale s2s pairs */
+      speechToSwap: { count: number; medianMs: number; p90Ms: number; invalid?: number };
       /** engine-latency distribution: 'segments' = per-word audio
           timestamps; 'vad-onset' = rough voice-onset→token-arrival
           fallback when segment timings are zeroed */
@@ -47,11 +47,35 @@ export type SessionEvent =
         count: number; medianMs: number; p90Ms: number;
         source: 'segments' | 'vad-onset';
       };
+      /** onset↔token pairs excluded as stale (>3000ms apart) */
+      invalidSamples?: number;
+      /** pending onsets voided because the session entered holding */
+      voidedByHold?: number;
+      /** why the sample count is low, when it is — the metric must
+          never silently read 0 (B.3.3 finding 2, hard gate) */
+      note?: string;
     };
 
 /** SessionEvent without its timestamp, distributed over the union. */
 type Body<E> = E extends { t: number } ? Omit<E, 't'> : never;
 type SessionEventBody = Body<SessionEvent>;
+
+/** What actually rendered — the tape must prove it, not assume it
+    (B.3.3 finding 1: neither B.3 log said which display was on). */
+export interface SessionHeader {
+  displayMode: 'karaoke' | 'ladder';
+  crossfadeMs: number;
+  /** slot brightness levels: active / next / (ladder) next-next */
+  brightness: { active: number; next: number; nextNext?: number };
+  /** computed font px after the width-fit cap */
+  fontPx: number;
+  distanceFt: number;
+  sizeMult: number;
+  /** which chunking algorithm produced `phrases` */
+  segmenterVersion: number;
+  phraseCount: number;
+  meanWordsPerPhrase: number;
+}
 
 export interface SessionLog {
   version: 1;
@@ -65,6 +89,8 @@ export interface SessionLog {
   /** The segmented phrase list (index → text) as the session saw it —
       decisions are index-only and unanalyzable without this. */
   phrases?: string[];
+  /** Render facts for the session — absent in pre-B.3.3 logs. */
+  header?: SessionHeader;
   events: SessionEvent[];
 }
 
@@ -74,7 +100,11 @@ export class FlightRecorder {
 
   start(
     script: { title: string; lang: Lang; body: string; aliases?: string },
-    opts: { swapTiming?: 'lead' | 'confirm' | 'flow'; phrases?: string[] } = {},
+    opts: {
+      swapTiming?: 'lead' | 'confirm' | 'flow';
+      phrases?: string[];
+      header?: SessionHeader;
+    } = {},
   ): void {
     this.t0 = performance.now();
     this.log = {
@@ -84,6 +114,7 @@ export class FlightRecorder {
       script,
       ...(opts.swapTiming ? { swapTiming: opts.swapTiming } : {}),
       ...(opts.phrases ? { phrases: opts.phrases } : {}),
+      ...(opts.header ? { header: opts.header } : {}),
       events: [],
     };
   }
@@ -120,15 +151,19 @@ export class FlightRecorder {
 
   /** Metric summary for one listening stretch. */
   summary(
-    speechToSwap: { count: number; medianMs: number; p90Ms: number },
+    speechToSwap: { count: number; medianMs: number; p90Ms: number; invalid?: number },
     emissionLag?: {
       count: number; medianMs: number; p90Ms: number;
       source: 'segments' | 'vad-onset';
     },
+    accounting?: { invalidSamples?: number; voidedByHold?: number; note?: string },
   ): void {
     this.push({
       kind: 'summary', speechToSwap,
       ...(emissionLag ? { emissionLag } : {}),
+      ...(accounting?.invalidSamples ? { invalidSamples: accounting.invalidSamples } : {}),
+      ...(accounting?.voidedByHold ? { voidedByHold: accounting.voidedByHold } : {}),
+      ...(accounting?.note ? { note: accounting.note } : {}),
     });
   }
 

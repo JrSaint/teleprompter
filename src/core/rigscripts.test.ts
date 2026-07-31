@@ -20,6 +20,27 @@ describe.each(RIG_SCRIPTS.map((s) => [s.title, s] as const))('%s', (_title, scri
     }
   });
 
+  it('v2 acceptance (B.3.3): 4–8 word cadence, zero crumbs, sentences intact', () => {
+    // crumb churn killed: nothing under 3 words, mean around a breath
+    expect(phrases.length).toBeLessThanOrEqual(26); // was 36/38 on v1
+    for (const p of phrases) {
+      expect(p.words.length).toBeGreaterThanOrEqual(3);
+      expect(p.words.length).toBeLessThanOrEqual(8);
+    }
+    const words = phrases.reduce((n, p) => n + p.words.length, 0);
+    expect(words / phrases.length).toBeGreaterThanOrEqual(5);
+    // no phrase runs across a sentence end — the single exception is a
+    // glued micro-beat ("Good.", "Muito bem.") LEADING a phrase, where
+    // the stop sits within the first two words
+    for (const p of phrases) {
+      p.words.forEach((w, i) => {
+        if (i < p.words.length - 1 && /[.!?…]["'")\]]*$/.test(w.text)) {
+          expect(i).toBeLessThanOrEqual(1);
+        }
+      });
+    }
+  });
+
   it('a straight read-through reaches the end', () => {
     const m = new PhraseMatcher(phrases);
     for (const p of phrases) m.feed(p.tokens);

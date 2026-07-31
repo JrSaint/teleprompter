@@ -1,5 +1,6 @@
 import type { Script, Settings } from '../store/db';
-import { segmentScript } from '../core/segmenter';
+import { segmentScript, SEGMENTER_VERSION } from '../core/segmenter';
+import type { SessionHeader } from '../core/recorder';
 import { PrompterController } from './controller';
 import { WebSpeechSource } from '../core/speech/WebSpeechSource';
 import { NativeSpeechSource } from '../core/speech/NativeSpeechSource';
@@ -19,11 +20,18 @@ export interface PrompterViewHandle {
     Tunable 100–250ms. Light moves, text doesn't — position never
     animates on the prompter screen (design law). */
 const SWAP_FADE_MS = 150;
+/** Vacated-slot refill: content changes only after the crossfade has
+    completed plus a beat — never inside the swap the reader is riding
+    (B.3.3 addendum c: the ~150ms-post-swap refill read as a flicker). */
+const REFILL_DELAY_MS = SWAP_FADE_MS + 200;
 
 /**
- * The rig display. One phrase large and centered, the next dimmed
- * below as preview. Swaps are instant — no scrolling, no animation.
- * Status strip and diagnostics overlay stay un-mirrored.
+ * The rig display. Fixed slots, stationary text, brightness-only
+ * emphasis — the line being read brightens IN PLACE. Karaoke: two
+ * slots, roles alternate. Ladder: three slots read strictly downward,
+ * wrapping back to the top (book-style return sweep). Swaps never
+ * scroll and never animate position. Status strip and diagnostics
+ * overlay stay un-mirrored.
  */
 export function createPrompterView(
   script: Script,
@@ -36,8 +44,9 @@ export function createPrompterView(
   el.innerHTML = `
     <div id="vp-flip">
       <div id="vp-block">
-        <div id="vp-current" aria-live="off"></div>
-        <div id="vp-next"></div>
+        <div class="vp-slot" id="vp-slot0" aria-live="off"></div>
+        <div class="vp-slot" id="vp-slot1"></div>
+        <div class="vp-slot" id="vp-slot2"></div>
       </div>
       <div id="vp-done" hidden>— end of script —</div>
     </div>
@@ -57,17 +66,29 @@ export function createPrompterView(
 
   const $ = (id: string) => el.querySelector<HTMLElement>('#' + id)!;
   const flip = $('vp-flip');
-  const curEl = $('vp-current');
-  const nextEl = $('vp-next');
+  const blockEl = $('vp-block');
   const doneEl = $('vp-done');
   const statusEl = $('vp-status');
   const diagEl = $('vp-diag');
   const armBtn = $('vp-arm');
 
-  // Rig display mode: mirror + distance-derived size. Current and
-  // next are the SAME size — one continuous script, emphasis by
-  // brightness only — and the size is capped so the widest phrase of
-  // THIS script fits on one line (never wrap mid-phrase).
+  // Display pattern: karaoke (2 slots, alternating roles) is the
+  // default; ladder (3 slots, strictly downward with a wrap to the
+  // top) is the A/B alternative. First phrase starts in the TOP slot
+  // in both modes (index 0 → slot 0).
+  const displayMode = settings.displayMode ?? 'karaoke';
+  const SLOTS = displayMode === 'ladder' ? 3 : 2;
+  const NEXT_NEXT_DIM = Math.max(0.15, settings.previewOpacity - 0.25);
+  const slotEls = [$('vp-slot0'), $('vp-slot1'), $('vp-slot2')];
+  slotEls[2].hidden = SLOTS < 3;
+  /** brightness by distance from the active phrase */
+  const brightnessFor = (dist: number): number =>
+    dist <= 0 ? 1 : dist === 1 ? settings.previewOpacity : NEXT_NEXT_DIM;
+
+  // Rig display mode: mirror + distance-derived size. Every slot is
+  // the SAME size — one continuous script, emphasis by brightness
+  // only — and the size is capped so the widest phrase of THIS script
+  // fits on one line (never wrap mid-phrase).
   flip.classList.toggle('mirror-h', settings.mirrorH);
   flip.classList.toggle('mirror-v', settings.mirrorV);
   const baseFontPx = fontPxForDistance(settings.distanceFt, settings.sizeMult);
@@ -81,12 +102,10 @@ export function createPrompterView(
   };
   const applySize = () => {
     const px = fitFontPx() + 'px';
-    curEl.style.fontSize = px;
-    nextEl.style.fontSize = px;
+    for (const s of slotEls) s.style.fontSize = px;
   };
   applySize();
   window.addEventListener('resize', applySize);
-  nextEl.style.opacity = String(settings.previewOpacity);
 
   /** Ease an element's brightness from → to over SWAP_FADE_MS. */
   const fadeTo = (elm: HTMLElement, from: string, to: string) => {
@@ -96,9 +115,104 @@ export function createPrompterView(
     elm.style.transition = `opacity ${SWAP_FADE_MS}ms ease`;
     elm.style.opacity = to;
   };
+  /** Ease from wherever the element actually is — hardcoded from-
+      values pop when a fade lands mid-flight (verify finding). */
+  const fadeCurrent = (elm: HTMLElement, to: string) => {
+    fadeTo(elm, getComputedStyle(elm).opacity, to);
+  };
+  const setOpacity = (elm: HTMLElement, to: string) => {
+    elm.style.transition = 'none';
+    elm.style.opacity = to;
+  };
 
   let flowState: FlowState = 'idle';
   let phraseIndex = 0;
+
+  /** which phrase each slot displays (-1 = dark/empty) */
+  const slotShows = [-1, -1, -1];
+  let refillTimer: ReturnType<typeof setTimeout> | null = null;
+
+  /** The phrase slot k should show while `active` is current: one of
+      active..active+SLOTS-1 by index-modulo, or null past the end. */
+  const targetFor = (k: number, active: number): number | null => {
+    for (let d = 0; d < SLOTS; d++) {
+      const p = active + d;
+      if (p >= phrases.length) break;
+      if (p % SLOTS === k) return p;
+    }
+    return null;
+  };
+
+  /** Two-phase content replacement mid-fade timers, one per slot —
+      visible text always fades OUT before its slot's content changes
+      (crossfade both directions, never a hard cut). */
+  const slotSwapTimers: Array<ReturnType<typeof setTimeout> | null> = [null, null, null];
+
+  const setSlot = (k: number, target: number | null, animate: boolean) => {
+    const timer = slotSwapTimers[k];
+    if (timer) {
+      clearTimeout(timer);
+      slotSwapTimers[k] = null;
+    }
+    const el = slotEls[k];
+    const to = target === null ? '0' : String(brightnessFor(target - phraseIndex));
+    const put = () => {
+      slotSwapTimers[k] = null;
+      renderPhrase(el, target === null ? null : phrases[target]);
+      fadeTo(el, '0', to);
+    };
+    slotShows[k] = target ?? -1;
+    if (!animate) {
+      renderPhrase(el, target === null ? null : phrases[target]);
+      setOpacity(el, to);
+      return;
+    }
+    const cur = parseFloat(getComputedStyle(el).opacity) || 0;
+    if (cur <= 0.05) {
+      put();
+      return;
+    }
+    fadeTo(el, String(cur), '0');
+    slotSwapTimers[k] = setTimeout(put, SWAP_FADE_MS);
+  };
+
+  /** Bring every slot to its target content AND brightness — content
+      via setSlot, and role brightness re-applied even when the content
+      already matches (a far-skip must never leave the live line dim —
+      verify finding). Idempotent, computed from the live index. */
+  const syncSlots = (animate: boolean) => {
+    for (let k = 0; k < SLOTS; k++) {
+      const target = targetFor(k, phraseIndex);
+      if (slotShows[k] === target) {
+        if (slotSwapTimers[k] === null) {
+          const to = target === null ? '0' : String(brightnessFor(target - phraseIndex));
+          if (animate) fadeCurrent(slotEls[k], to);
+          else setOpacity(slotEls[k], to);
+        }
+        continue;
+      }
+      setSlot(k, target, animate);
+    }
+  };
+
+  const scheduleRefill = () => {
+    if (refillTimer) clearTimeout(refillTimer);
+    refillTimer = setTimeout(() => {
+      refillTimer = null;
+      syncSlots(true);
+    }, REFILL_DELAY_MS);
+  };
+
+  /** A pending refill must land BEFORE the next swap is processed —
+      otherwise clumped advances (250ms dwell < 350ms refill) find the
+      entering slot empty and hard-cut (verify finding). */
+  const flushRefill = () => {
+    if (refillTimer) {
+      clearTimeout(refillTimer);
+      refillTimer = null;
+      syncSlots(true);
+    }
+  };
 
   const diagBody = $('vp-diag-body');
 
@@ -147,22 +261,69 @@ export function createPrompterView(
   // chosen outside the installed app, which the status strip shows.
   const speech =
     settings.engine === 'native' ? new NativeSpeechSource() : new WebSpeechSource();
+  // Render facts for the session header — the tape proves what was on
+  // screen (display pattern, brightness, the computed font px, and
+  // which segmenter cut the phrase list).
+  const header: SessionHeader = {
+    displayMode,
+    crossfadeMs: SWAP_FADE_MS,
+    brightness: {
+      active: 1,
+      next: settings.previewOpacity,
+      ...(SLOTS === 3 ? { nextNext: NEXT_NEXT_DIM } : {}),
+    },
+    fontPx: fitFontPx(),
+    distanceFt: settings.distanceFt,
+    sizeMult: settings.sizeMult,
+    segmenterVersion: SEGMENTER_VERSION,
+    phraseCount: phrases.length,
+    meanWordsPerPhrase:
+      Math.round(
+        (phrases.reduce((n, p) => n + p.words.length, 0) /
+          Math.max(1, phrases.length)) * 10,
+      ) / 10,
+  };
   const controller = new PrompterController(script, phrases, speech, {
-    onPhrase: (cur, nxt, i) => {
-      const swapped = i !== phraseIndex;
+    onPhrase: (cur, _nxt, i) => {
+      const prev = phraseIndex;
+      const swapped = i !== prev;
       phraseIndex = i;
       const finished = cur === null;
       doneEl.hidden = !finished;
-      curEl.hidden = finished;
-      nextEl.hidden = finished;
-      renderPhrase(curEl, cur);
-      renderPhrase(nextEl, nxt);
-      // Crossfade: the entering line eases dim→bright, the incoming
-      // preview eases dark→dim. Brightness only — no positional
-      // animation, ever (design law: light moves, text doesn't).
-      if (swapped && !finished) {
-        fadeTo(curEl, String(settings.previewOpacity), '1');
-        fadeTo(nextEl, '0', String(settings.previewOpacity));
+      blockEl.hidden = finished;
+      if (finished) {
+        if (refillTimer) clearTimeout(refillTimer);
+        refillTimer = null;
+        paintStatus();
+        return;
+      }
+      // Brightness only — no positional animation, ever (design law:
+      // light moves, text doesn't).
+      if (!swapped && slotShows[i % SLOTS] !== i) {
+        // initial paint (or a repaint): steady state, no fades
+        syncSlots(false);
+      } else if (swapped) {
+        // a pending refill lands first, so clumped advances always
+        // find their entering slot previewing (no hard cuts)
+        flushRefill();
+        if (i === prev + 1 && slotShows[i % SLOTS] === i) {
+          // the entering line brightens IN PLACE — its text was
+          // already previewing in its slot; the deeper preview steps
+          // up one level; the vacated slot fades dark and refills
+          // only after the crossfade + a beat (never mid-swap)
+          fadeCurrent(slotEls[i % SLOTS], '1');
+          if (SLOTS === 3 && slotShows[(i + 1) % SLOTS] === i + 1) {
+            fadeCurrent(slotEls[(i + 1) % SLOTS], String(settings.previewOpacity));
+          }
+          const vacated = prev % SLOTS;
+          fadeCurrent(slotEls[vacated], '0');
+          slotShows[vacated] = -1; // stale content, refill pending
+          scheduleRefill();
+        } else {
+          // manual nav, restart, or a far-skip landing — full re-sync
+          // (two-phase content swaps, brightness re-applied)
+          syncSlots(true);
+        }
       }
       paintStatus();
     },
@@ -173,7 +334,7 @@ export function createPrompterView(
       paintDiag(diag.snapshot());
     },
     onMic: (s, detail) => paintStatus(s, detail),
-  }, { mode: settings.swapTiming });
+  }, { mode: settings.swapTiming, header });
 
   const unsubDiag = diag.subscribe(paintDiag);
   diagEl.hidden = !settings.diagOverlay;
@@ -253,6 +414,8 @@ export function createPrompterView(
     dispose() {
       window.removeEventListener('keydown', onKey);
       window.removeEventListener('resize', applySize);
+      if (refillTimer) clearTimeout(refillTimer);
+      for (const t of slotSwapTimers) if (t) clearTimeout(t);
       unsubDiag();
       controller.dispose();
       releaseWakeLock();

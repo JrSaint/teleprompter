@@ -103,10 +103,12 @@ button { font: inherit; color: inherit; background: none; border: none; cursor: 
 #vp-flip.mirror-v { transform: scaleY(-1); }
 #vp-flip.mirror-h.mirror-v { transform: scale(-1, -1); }
 
-/* One continuous script block: current + next as two adjacent lines
-   of prose — SAME size, tight spacing, emphasis by brightness only.
+/* One continuous script block: fixed slots as adjacent lines of
+   prose — SAME size, tight spacing, emphasis by brightness only.
    A size drop + spatial gap reads as "title + caption" and made the
-   reader stop at every boundary (B.3.1 root cause). */
+   reader stop at every boundary (B.3.1 root cause). All slots share
+   one weight: with in-place brightening, a weight change would nudge
+   glyph widths — text must never move (design law). */
 #vp-block {
   position: absolute; inset: 0;
   display: flex; flex-direction: column;
@@ -114,13 +116,10 @@ button { font: inherit; color: inherit; background: none; border: none; cursor: 
   text-align: center; padding: 0 6vw;
   line-height: 1.25;
 }
-#vp-current {
+.vp-slot {
   font-weight: 700; color: #fff; white-space: nowrap;
+  min-height: 1.25em; /* an empty slot still holds its line */
   /* mixed case, heavy sans, max legibility — locked */
-}
-#vp-next {
-  font-weight: 600; color: #fff; white-space: nowrap;
-  /* one weight step down; opacity from the previewOpacity setting */
 }
 #vp-done {
   position: absolute; inset: 0; display: flex; align-items: center;

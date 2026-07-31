@@ -206,8 +206,7 @@ describe('fixture en-native (B.2 close-out tape)', () => {
   });
 
   it('glides past the engine-dropped tail via tail-rescue on first next-phrase evidence', () => {
-    const phrases = segmentScript(log.script.body, log.script.lang);
-    const endIdx = phrases.findIndex((p) => p.text === 'the end.');
+    const endIdx = (log.phrases ?? []).indexOf('the end.');
     expect(endIdx).toBeGreaterThan(0);
     const out = r.moves.find((m) => m.to === endIdx + 1);
     // fires on "screen" (t=80492) — not a stall, not a mislabeled lead
@@ -381,6 +380,9 @@ describe('flow replay synthetic', () => {
     version: 1, id: 'flow-fixture', startedAtIso: '2026-07-31T00:00:00Z',
     script: { title: 'flow', lang: 'en-US', body },
     swapTiming: 'flow',
+    // the timing math below is derived from these exact shapes — pin
+    // them the way a real tape does, immune to segmenter evolution
+    phrases: ['Alpha bravo charlie', 'delta echo.', 'Foxtrot golf hotel india.', 'Juliet kilo lima mike.'],
     events,
   });
   const at = (t: number, word: string): SessionEvent =>

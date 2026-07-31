@@ -1,9 +1,10 @@
 import './style.css';
 import {
   loadScripts, loadSettings, migrateFromLocalStorage, seedRigScripts,
-  type Script, type Settings,
+  ensureSegmenterVersion, type Script, type Settings,
 } from './store/db';
 import { RIG_SCRIPTS } from './store/seeds';
+import { SEGMENTER_VERSION } from './core/segmenter';
 import { createSetupView } from './ui/SetupView';
 import { createPrompterView } from './ui/PrompterView';
 import { createCalibrationView } from './ui/CalibrationView';
@@ -61,6 +62,7 @@ function showCalibration(settings: Settings, lang: Lang): void {
 async function boot(): Promise<void> {
   await migrateFromLocalStorage();
   await seedRigScripts(RIG_SCRIPTS);
+  await ensureSegmenterVersion(SEGMENTER_VERSION);
   const settings = await loadSettings();
   await showSetup(settings);
   if ('serviceWorker' in navigator && window.isSecureContext && import.meta.env.PROD) {

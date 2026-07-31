@@ -77,6 +77,18 @@ public class NativeSpeechPlugin: CAPPlugin, CAPBridgedPlugin {
     private var vadVoicedStreak = 0
     private var vadArmed = false
 
+    // Token-silence watchdog (B.3.3 finding 3b): the PT tape shows the
+    // recognizer emitting isolated words 8.6s apart through continuous
+    // speech. If ≥5s of VOICED audio accumulates with zero results
+    // from the task, the task is dead weight — restart it (the JS side
+    // reuses restart-grace). Guarded by the meter lock; a generation
+    // counter keeps a cancelled task's completion from double-spawning.
+    private static let watchdogVoicedMaxMs: Double = 5000
+    private var watchdogVoicedMs: Double = 0
+    private var watchdogPending = false
+    private var taskGeneration = 0
+    private var currentRecognizer: SFSpeechRecognizer?
+
     @objc func start(_ call: CAPPluginCall) {
         let (isDuplicate, seq): (Bool, Int) = stateQueue.sync {
             if active { return (true, startSeq) }
@@ -156,6 +168,11 @@ public class NativeSpeechPlugin: CAPPlugin, CAPBridgedPlugin {
         let session = AVAudioSession.sharedInstance()
         try session.setCategory(.playAndRecord, mode: .default,
                                 options: [.defaultToSpeaker, .allowBluetooth, .duckOthers])
+        // Pin the rate: the B.3.3 PT session drifted to 44100Hz while
+        // EN ran at 48000Hz minutes apart (finding 3a). Preferred
+        // values are requests — the granted values are logged in env.
+        try? session.setPreferredSampleRate(48000)
+        try? session.setPreferredIOBufferDuration(0.02)
         try session.setActive(true, options: .notifyOthersOnDeactivation)
         return session
     }
@@ -180,11 +197,16 @@ public class NativeSpeechPlugin: CAPPlugin, CAPBridgedPlugin {
         case .undetermined: permission = "undetermined"
         @unknown default: permission = "unknown"
         }
+        let inputs = session.currentRoute.inputs
+            .map { "\($0.portType.rawValue):\($0.portName)" }
+            .joined(separator: ", ")
         return [
             "recordPermission": permission,
             "sessionCategory": session.category.rawValue,
             "sessionMode": session.mode.rawValue,
             "sessionSampleRate": session.sampleRate,
+            "preferredSampleRate": session.preferredSampleRate,
+            "inputRoute": inputs,
             "isInputAvailable": session.isInputAvailable,
         ]
     }
@@ -192,6 +214,7 @@ public class NativeSpeechPlugin: CAPPlugin, CAPBridgedPlugin {
     // MARK: - SFSpeechRecognizer path (on-device required)
 
     private func startRecognizer() {
+        guard isActive else { return } // stopped before start finished
         guard let recognizer = SFSpeechRecognizer(locale: Locale(identifier: localeId)) else {
             emitStatus("unavailable", detail: "no recognizer exists for \(localeId)")
             return
@@ -232,6 +255,7 @@ public class NativeSpeechPlugin: CAPPlugin, CAPBridgedPlugin {
             emitStatus("error", detail: "microphone reports an invalid audio format (\(format.sampleRate) Hz)")
             return
         }
+        currentRecognizer = recognizer
         armListeningConfirmation(detail: "recognizer")
         input.removeTap(onBus: 0)
         input.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak self] buffer, _ in
@@ -258,6 +282,7 @@ public class NativeSpeechPlugin: CAPPlugin, CAPBridgedPlugin {
     }
 
     private func spawnRecognitionTask(_ recognizer: SFSpeechRecognizer) {
+        guard isActive else { return } // a stop won the race
         let req = SFSpeechAudioBufferRecognitionRequest()
         req.shouldReportPartialResults = true
         req.requiresOnDeviceRecognition = true
@@ -270,9 +295,15 @@ public class NativeSpeechPlugin: CAPPlugin, CAPBridgedPlugin {
         // appending the moment `request` is non-nil, and the anchor
         // must stamp that first appended buffer (the request's audio
         // t=0), not a later one. Provisional value covers the gap.
+        // A fresh task also resets the watchdog and advances the
+        // generation, orphaning any cancelled task's completion.
         meterLock.lock()
         sessionStartEpochMs = Date().timeIntervalSince1970 * 1000
         anchorPending = true
+        watchdogVoicedMs = 0
+        watchdogPending = false
+        taskGeneration += 1
+        let gen = taskGeneration
         meterLock.unlock()
         request = req
         wordsThisSession = false
@@ -284,7 +315,8 @@ public class NativeSpeechPlugin: CAPPlugin, CAPBridgedPlugin {
         }
 
         task = recognizer.recognitionTask(with: req) { [weak self] result, error in
-            guard let self = self, self.isActive else { return }
+            guard let self = self, self.isActive,
+                  gen == self.liveGeneration() else { return }
             if let result = result {
                 var words: [String] = []
                 var ends: [Double] = []
@@ -303,6 +335,10 @@ public class NativeSpeechPlugin: CAPPlugin, CAPBridgedPlugin {
                 if !words.isEmpty {
                     self.wordsThisSession = true
                     self.consecutiveFailures = 0
+                    // results are flowing — the watchdog stands down
+                    self.meterLock.lock()
+                    self.watchdogVoicedMs = 0
+                    self.meterLock.unlock()
                 }
                 self.emitWords(words, ends: ends, isFinal: result.isFinal, engine: "recognizer")
             }
@@ -327,9 +363,16 @@ public class NativeSpeechPlugin: CAPPlugin, CAPBridgedPlugin {
                 }
                 let backoffMs = min(2000.0, 50.0 * pow(2.0, Double(self.consecutiveFailures)))
                 self.endedAtEpochMs = Date().timeIntervalSince1970 * 1000
+                // unpublish the dead request: the tap must not keep
+                // appending to it, and the watchdog must not count
+                // voiced audio against a task that no longer exists
+                self.request = nil
                 self.emitStatus("restarting")
                 DispatchQueue.main.asyncAfter(deadline: .now() + backoffMs / 1000.0) {
-                    if self.isActive { self.spawnRecognitionTask(recognizer) }
+                    // a watchdog restart or stop during the backoff
+                    // advances the generation — this respawn is stale
+                    guard self.isActive, gen == self.liveGeneration() else { return }
+                    self.spawnRecognitionTask(recognizer)
                 }
             }
         }
@@ -346,7 +389,57 @@ public class NativeSpeechPlugin: CAPPlugin, CAPBridgedPlugin {
     /// Called from the audio thread (recognizer tap). Thread-safe.
     func onTapBuffer(_ buffer: AVAudioPCMBuffer) {
         let rms = Self.rms(of: buffer)
+        // watchdog accounting: voiced milliseconds since the last
+        // fresh result — only while a recognition request is live
+        let bufMs = buffer.format.sampleRate > 0
+            ? Double(buffer.frameLength) / buffer.format.sampleRate * 1000 : 0
+        var fireMs: Double = 0
+        meterLock.lock()
+        if request != nil && rms >= Self.vadVoiceRms {
+            watchdogVoicedMs += bufMs
+            if watchdogVoicedMs >= Self.watchdogVoicedMaxMs && !watchdogPending {
+                watchdogPending = true
+                fireMs = watchdogVoicedMs
+            }
+        }
+        meterLock.unlock()
         reportLevel(rms: rms)
+        if fireMs > 0 {
+            DispatchQueue.main.async { self.watchdogRestart(voicedMs: fireMs) }
+        }
+    }
+
+    /// The task has been fed ≥5s of voiced audio and returned nothing:
+    /// tear it down and respawn. The generation bump makes the
+    /// cancelled task's completion handler a no-op (no double spawn,
+    /// no failure count — this is a recovery, not a crash).
+    private func watchdogRestart(voicedMs: Double) {
+        guard isActive, request != nil, let recognizer = currentRecognizer else {
+            meterLock.lock()
+            watchdogPending = false
+            watchdogVoicedMs = 0
+            meterLock.unlock()
+            return
+        }
+        emitStatus("restarting",
+                   detail: "watchdog: \(Int(voicedMs))ms voiced speech, zero fresh tokens")
+        endedAtEpochMs = Date().timeIntervalSince1970 * 1000
+        // orphan the dying task BEFORE cancelling: its completion must
+        // fail the generation gate, or it counts a failure and
+        // schedules a second respawn on top of ours
+        meterLock.lock()
+        taskGeneration += 1
+        meterLock.unlock()
+        task?.cancel()
+        task = nil
+        request = nil
+        spawnRecognitionTask(recognizer)
+    }
+
+    private func liveGeneration() -> Int {
+        meterLock.lock()
+        defer { meterLock.unlock() }
+        return taskGeneration
     }
 
     /// Thread-safe level/listening reporting shared by both engines.
@@ -459,7 +552,11 @@ public class NativeSpeechPlugin: CAPPlugin, CAPBridgedPlugin {
         vadQuietSinceMs = 0
         vadVoicedStreak = 0
         vadArmed = false
+        watchdogVoicedMs = 0
+        watchdogPending = false
+        taskGeneration += 1
         meterLock.unlock()
+        currentRecognizer = nil
         task?.cancel()
         task = nil
         request = nil

@@ -105,6 +105,7 @@ export class NativeSpeechSource implements SpeechSource {
           audioEndMs: freshEnds,
           audioAnchorMs,
           emissionLagMs,
+          pureAppend,
         });
       }),
       await NativeSpeech.addListener('status', (e) => {

@@ -35,6 +35,10 @@ export interface WordsMeta {
       wall). Null where the engine gave no usable timestamp — on-device
       partials often report zeroed segment timings. */
   emissionLagMs?: Array<number | null>;
+  /** True when this event strictly appended to the transcript; false
+      when a revision re-stated earlier words. Re-statements never
+      close metric samples — a legitimate long append may. */
+  pureAppend?: boolean;
 }
 
 export interface SpeechSource {

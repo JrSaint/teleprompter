@@ -174,6 +174,16 @@ export function createSetupView(
             ? 'Confirm swaps when the phrase completes.'
             : 'Lead swaps early, just before the last word.'
       }</div>
+      <label class="su-row"><span>Display</span>
+        <select id="set-display">
+          <option value="karaoke" ${settings.displayMode === 'karaoke' ? 'selected' : ''}>Karaoke (2 lines)</option>
+          <option value="ladder" ${settings.displayMode === 'ladder' ? 'selected' : ''}>Ladder (3 lines)</option>
+        </select></label>
+      <div class="su-engine-hint">${
+        settings.displayMode === 'ladder'
+          ? 'Ladder: three fixed lines read strictly downward, then the reading position sweeps back to the top — like lines of a book.'
+          : 'Karaoke: two fixed lines; the line being read brightens in place and the other previews what comes next.'
+      }</div>
       <label class="su-row"><span>Preview brightness <b>${Math.round(settings.previewOpacity * 100)}%</b></span>
         <input type="range" id="set-preview" min="30" max="80" step="5" value="${Math.round(settings.previewOpacity * 100)}"></label>
       <label class="su-row"><span>Speech engine</span>
@@ -210,6 +220,11 @@ export function createSetupView(
     };
     (card.querySelector('#set-swap') as HTMLSelectElement).onchange = (e) => {
       settings.swapTiming = (e.target as HTMLSelectElement).value as 'lead' | 'confirm' | 'flow';
+      void persistSettings();
+      renderSettingsCard();
+    };
+    (card.querySelector('#set-display') as HTMLSelectElement).onchange = (e) => {
+      settings.displayMode = (e.target as HTMLSelectElement).value as 'karaoke' | 'ladder';
       void persistSettings();
       renderSettingsCard();
     };

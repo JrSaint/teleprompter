@@ -10,9 +10,9 @@ describe('segmenter', () => {
     const out = texts('We begin tonight. The river was rising fast.');
     expect(out[0]).toBe('We begin tonight.');
     expect(out.join(' ')).toBe('We begin tonight. The river was rising fast.');
-    // no phrase longer than 5 words
+    // no phrase longer than 8 words (v2 cap)
     for (const p of segmentScript('We begin tonight. The river was rising fast.', 'en-US')) {
-      expect(p.words.length).toBeLessThanOrEqual(5);
+      expect(p.words.length).toBeLessThanOrEqual(8);
       expect(p.words.length).toBeGreaterThanOrEqual(2);
     }
   });
@@ -25,8 +25,8 @@ describe('segmenter', () => {
   });
 
   it('breaks at commas before falling back to word caps', () => {
-    const out = texts('First we gather, then we march together');
-    expect(out[0]).toBe('First we gather,');
+    const out = texts('First we gather in the hall together, then we march across the bridge as one');
+    expect(out[0]).toBe('First we gather in the hall together,');
   });
 
   it('prefers breaking before conjunctions', () => {
@@ -42,11 +42,11 @@ describe('segmenter', () => {
     expect(out[0].text.startsWith('Stop.')).toBe(true);
   });
 
-  it('orphan merge steals one word, keeping both phrases within caps', () => {
+  it('micro-sentence beats glue whole into the neighboring sentence', () => {
     const out = texts('Stop. Everything you know is wrong.');
-    expect(out).toEqual(['Stop. Everything', 'you know is wrong.']);
+    expect(out).toEqual(['Stop. Everything you know is wrong.']);
     for (const p of segmentScript('Stop. Everything you know is wrong.', 'en-US')) {
-      expect(p.words.length).toBeLessThanOrEqual(5);
+      expect(p.words.length).toBeLessThanOrEqual(8);
     }
   });
 
@@ -78,14 +78,14 @@ describe('segmenter', () => {
   });
 
   it('treats a spaced ASCII hyphen as a tier-2 break', () => {
-    const out = texts('First we gather - then we march together');
-    expect(out[0]).toBe('First we gather -');
+    const out = texts('First we gather in the hall - then we march across the old bridge');
+    expect(out[0]).toBe('First we gather in the hall -');
   });
 
   it('keeps phrases under ~30 characters when unbroken text is long', () => {
     const long = 'supercalifragilistic expialidocious antidisestablishmentarianism words continue here now';
     for (const p of segmentScript(long, 'en-US')) {
-      expect(p.words.length).toBeLessThanOrEqual(5);
+      expect(p.words.length).toBeLessThanOrEqual(8);
     }
   });
 

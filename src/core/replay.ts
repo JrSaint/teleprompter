@@ -1,5 +1,5 @@
 import type { SessionLog } from './recorder';
-import { segmentScript } from './segmenter';
+import { segmentScript, phraseFromText } from './segmenter';
 import { parseAliases } from './aliases';
 import { PhraseMatcher, type MatcherConfig, type MatchEvent } from './matcher';
 import { FlowModel, FLOW_HOLD_MS } from './flowpredict';
@@ -28,7 +28,12 @@ export function replaySession(
   cfg: Partial<MatcherConfig> = {},
   opts: { flowPredict?: boolean } = {},
 ): ReplayResult {
-  const phrases = segmentScript(log.script.body, log.script.lang);
+  // A tape that recorded its phrase list replays against EXACTLY that
+  // list — decisions are index-only, and the segmenter has moved on
+  // since older tapes were cut. Fresh segmentation is the fallback.
+  const phrases = log.phrases
+    ? log.phrases.map((t) => phraseFromText(t, log.script.lang))
+    : segmentScript(log.script.body, log.script.lang);
   // the session's own aliases and swap timing apply unless overridden
   // (flow = lead evidence rules + simulated predictive swaps)
   const m = new PhraseMatcher(phrases, {

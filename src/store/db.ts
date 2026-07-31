@@ -9,6 +9,11 @@ export interface Script {
   updated: number;
   /** Pronunciation aliases, one per line: "target: variant, variant" */
   aliases?: string;
+  /** SEGMENTER_VERSION last stamped on this script — segmentation is
+      derived live from the body, so the stamp exists to make
+      segmenter freshness VISIBLE in the data (script.updated moves
+      when the algorithm does; B.3.3 finding 0). */
+  segVersion?: number;
 }
 
 export interface Settings {
@@ -26,6 +31,9 @@ export interface Settings {
   previewOpacity: number;
   /** Speech engine: web (Safari API) or native (iPad app, on-device). */
   engine: 'web' | 'native';
+  /** Display pattern: karaoke (2 slots, alternating) or ladder
+      (3 slots, strictly downward with a wrap to the top). */
+  displayMode: 'karaoke' | 'ladder';
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -38,6 +46,7 @@ export const DEFAULT_SETTINGS: Settings = {
   swapTiming: 'lead',
   previewOpacity: 0.6,
   engine: 'web',
+  displayMode: 'karaoke',
 };
 
 const db = localforage.createInstance({ name: 'voice-prompter' });
@@ -78,11 +87,11 @@ export async function loadSessionLogs(): Promise<unknown[]> {
  * touched; re-running is a no-op thanks to the flag).
  */
 export async function seedRigScripts(seeds: Script[]): Promise<void> {
-  // v5: adds "promotor" to the PT alias demo (B.3 tape, t=55681).
-  // Upserts by id so updates reach devices seeded earlier (the two
-  // rig-test scripts are fixtures; local edits to them are
-  // intentionally replaced).
-  const FLAG = 'seeded_rigtest_v5';
+  // v6: adds "pau" to the PT alias demo (B.3.3 tape, t=56772) and
+  // stamps segVersion. Upserts by id so updates reach devices seeded
+  // earlier (the two rig-test scripts are fixtures; local edits to
+  // them are intentionally replaced).
+  const FLAG = 'seeded_rigtest_v6';
   if (await db.getItem(FLAG)) return;
   const scripts = await loadScripts();
   for (const seed of seeds) {
@@ -93,6 +102,28 @@ export async function seedRigScripts(seeds: Script[]): Promise<void> {
   }
   await saveScripts(scripts);
   await db.setItem(FLAG, 1);
+}
+
+/**
+ * Stamp every stored script (user scripts AND seeds) with the current
+ * segmenter version on load. Segmentation is always derived live from
+ * the body, so nothing is recomputed — but the stamp moves
+ * script.updated whenever the algorithm changes, making segmenter
+ * freshness visible in the data instead of assumed (B.3.3 finding 0:
+ * a re-segmentation "shipped" invisibly is indistinguishable from one
+ * that never shipped).
+ */
+export async function ensureSegmenterVersion(version: number): Promise<void> {
+  const scripts = await loadScripts();
+  let touched = false;
+  for (const s of scripts) {
+    if (s.segVersion !== version) {
+      s.segVersion = version;
+      s.updated = Date.now();
+      touched = true;
+    }
+  }
+  if (touched) await saveScripts(scripts);
 }
 
 /**

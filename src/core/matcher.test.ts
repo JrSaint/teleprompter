@@ -64,7 +64,7 @@ describe('matcher', () => {
 
   it('skips forward when a later phrase is clearly spoken', () => {
     const { m, phrases } = build(
-      'First we gather in the hall. / Then we march across the bridge.',
+      'First we gather / in the hall. / Then we march across / the bridge tonight.',
     );
     expect(phrases.length).toBeGreaterThanOrEqual(3);
     // speaker skips the rest of sentence one and starts sentence two,
@@ -234,7 +234,7 @@ describe('matcher', () => {
   });
 
   it('RC3: a duplicated word never cross-credits a similar token (este→teste)', () => {
-    const { m } = build('Este é o teste de sessenta segundos agora.', 'pt-BR');
+    const { m } = build('Este é o teste de / sessenta segundos agora.', 'pt-BR');
     m.feed(['este']);
     const before = m.contentMatchedCount(0);
     m.feed(['este']); // duplicate interim re-emission
@@ -270,7 +270,7 @@ describe('matcher', () => {
   });
 
   it('lead mode: 1-content phrases keep confirm behavior', () => {
-    const phrases = segmentScript('a próxima. Outra frase inteira aqui agora.', 'pt-BR');
+    const phrases = segmentScript('a próxima / outra frase inteira aqui agora', 'pt-BR');
     const m = new PhraseMatcher(phrases, { leadMode: true });
     expect(phrases[0].contentIdx.length).toBe(1);
     m.feed(['a']); // stopword touch only — must NOT swap
@@ -287,7 +287,7 @@ describe('matcher', () => {
   });
 
   it('aliases: "O Peter esperou" advances the prompter phrase without all-but-one', () => {
-    const body = 'Muito bem. O prompter esperou por você e te encontrou de novo.';
+    const body = 'Muito bem. / O prompter esperou por você / e te encontrou de novo.';
     const phrases = segmentScript(body, 'pt-BR');
     const aliases = parseAliases('prompter: peter, pro, pt');
     const m = new PhraseMatcher(phrases, { aliases });
@@ -303,7 +303,7 @@ describe('matcher', () => {
   });
 
   it('aliases: multi-word brand rides through via per-word aliases', () => {
-    const body = 'Use the Kids Chore Chart daily. Another sentence entirely follows here.';
+    const body = 'Use the Kids Chore Chart / daily and often. Another sentence entirely follows here.';
     const phrases = segmentScript(body, 'en-US');
     // variants far outside fuzzy range, like the real "Peter"→"prompter"
     const aliases = parseAliases('kids: quites\nchore: xorro\nchart: xarope');
