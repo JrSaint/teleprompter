@@ -82,7 +82,9 @@ export function replaySession(
     }
   };
 
-  for (const e of log.events) {
+  const evs = log.events;
+  for (let i = 0; i < evs.length; i++) {
+    const e = evs[i];
     if (e.kind === 'mic') {
       if (e.status === 'restarting') restarting = true;
       else if (e.status === 'listening' && restarting) {
@@ -99,8 +101,27 @@ export function replaySession(
       continue;
     }
     if (e.kind !== 'token') continue;
+    // Live delivers each engine callback as ONE feed() — consecutive
+    // token events sharing a timestamp are one arrival. Feeding them
+    // singly was unfaithful: the 81-token regurgitation batch must
+    // reach the matcher as a batch or the re-emission guard (and any
+    // batch-shaped behavior) can never replay (engine surgery item 1).
+    // One live feed logs its tokens within a couple of ms; separate
+    // engine callbacks are ≥100ms apart. A 2ms slack merges batches
+    // the recorder's ms rounding straddled (pt-b33 logged one 40-token
+    // feed as 34+6 across a 1ms tick — adversarial-verify finding)
+    // without ever merging genuinely separate arrivals.
+    const batch = [e.word];
+    let prevT = e.t;
+    while (i + 1 < evs.length) {
+      const nx = evs[i + 1];
+      if (nx.kind !== 'token' || nx.t - prevT > 2) break;
+      i++;
+      prevT = nx.t;
+      batch.push(nx.word);
+    }
     tryFlowPredict(e.t);
-    const res = m.feed([e.word], { grace: e.t <= graceUntil });
+    const res = m.feed(batch, { grace: e.t <= graceUntil });
     if (flowOn) {
       timerArmed = true; // consume() reschedules the live timer
       for (let i = 0; i < res.contentHits; i++) model.noteContent(e.t);

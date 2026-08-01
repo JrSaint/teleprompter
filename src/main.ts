@@ -10,6 +10,7 @@ import { createPrompterView } from './ui/PrompterView';
 import { createCalibrationView } from './ui/CalibrationView';
 import type { Lang } from './core/text';
 import { diag } from './core/diag';
+import { prewarmNativeSpeech } from './core/speech/NativeSpeechSource';
 
 const root = document.getElementById('app')!;
 
@@ -64,6 +65,13 @@ async function boot(): Promise<void> {
   await seedRigScripts(RIG_SCRIPTS);
   await ensureSegmenterVersion(SEGMENTER_VERSION);
   const settings = await loadSettings();
+  if (settings.engine === 'native') {
+    // pre-warm the engine at launch (readiness gate): most recently
+    // touched script's language is tonight's language
+    const scripts = await loadScripts();
+    const last = [...scripts].sort((a, b) => b.updated - a.updated)[0];
+    prewarmNativeSpeech(last?.lang ?? 'en-US');
+  }
   await showSetup(settings);
   if ('serviceWorker' in navigator && window.isSecureContext && import.meta.env.PROD) {
     navigator.serviceWorker.register('./sw.js').catch(() => {});

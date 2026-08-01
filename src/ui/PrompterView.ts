@@ -1,4 +1,4 @@
-import type { Script, Settings } from '../store/db';
+import { saveSettings, type Script, type Settings } from '../store/db';
 import { segmentScript, SEGMENTER_VERSION } from '../core/segmenter';
 import type { SessionHeader } from '../core/recorder';
 import { PrompterController } from './controller';
@@ -54,6 +54,9 @@ export function createPrompterView(
     <div id="vp-diag" hidden>
       <div id="vp-diag-body"></div>
       <button id="vp-copylog" title="Copy session log to clipboard">⧉ Copy log</button>
+      <label id="vp-ptserver" title="Dev flag (ship-gate fallback spike): pt-BR recognition via Apple servers. Applies on the NEXT session open.">
+        <input type="checkbox" id="vp-ptserver-cb"> PT server (spike)
+      </label>
     </div>
     <div id="vp-bar">
       <button id="vp-exit" title="Exit (Esc)">✕</button>
@@ -443,6 +446,15 @@ export function createPrompterView(
     setTimeout(() => (btn.textContent = '⧉ Copy log'), 1500);
   };
 
+  {
+    const cb = el.querySelector('#vp-ptserver-cb') as HTMLInputElement;
+    cb.checked = settings.ptServerAssisted === true;
+    cb.onchange = () => {
+      settings.ptServerAssisted = cb.checked;
+      void saveSettings(settings);
+      cb.blur(); // Space must stay arm/pause, never re-toggle the flag
+    };
+  }
   $('vp-exit').onclick = onExit;
   $('vp-prev').onclick = () => controller.prev();
   $('vp-next-btn').onclick = () => controller.next();

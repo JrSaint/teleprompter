@@ -79,12 +79,18 @@ shell with a custom Swift NativeSpeech plugin. Tests: `npx vitest run`.
   read word-by-word as tokens confirm. Needs per-word matched-state
   surfaced from the matcher to the display plus a "Line vs Word"
   brightening setting. Revisit after the display + timing A/Bs.
-- **Dropout hunt matrix** (B.3.5): PT dropouts (3–13s mid-read) AND
-  the EN stall class — cold-launch first session (~5s to listening,
-  first sentence consumed but never emitted) and mid-read ~2-4s
-  token gaps. Needs device tapes; the simulator recognizer cannot
-  initialize at all (B.2: instant task failure), so it cannot host
-  this class.
+- **Engine-surgery device validation** (supersedes the B.3.5 dropout
+  hunt): the surgery is BUILT — matcher re-emission guard (jumps
+  never launch on regurgitated evidence; replay feeds same-t token
+  batches as one arrival), proactive task-age rotation (45s
+  on-device / 40s server, 1s overlap, 2.5s retiring-results window,
+  `rotating` events), fresh-task-per-watchdog, launch pre-warm +
+  `warming` readiness gate, PT-server dev toggle in the D overlay.
+  Next device tapes must show: rotation events at ~45s intervals,
+  ZERO transcript regurgitations (the age hypothesis), zero false
+  jumps, cold start <2s to listening. The simulator cannot host any
+  of the recognition classes (B.2: instant task failure; B.4 spike:
+  server tasks die 'Retry', supportedLocales empty).
 - **NativeSpeechPlugin sync consolidation** (B.3.3 review debt): the
   plugin has three synchronization domains (stateQueue, meterLock,
   unsynchronized session objects across four threads). Fold

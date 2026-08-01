@@ -31,6 +31,7 @@ public class NativeSpeechPlugin: CAPPlugin, CAPBridgedPlugin {
     public let pluginMethods: [CAPPluginMethod] = [
         CAPPluginMethod(name: "start", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "stop", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "prewarm", returnType: CAPPluginReturnPromise),
     ]
 
     private let audioEngine = AVAudioEngine()
@@ -90,6 +91,30 @@ public class NativeSpeechPlugin: CAPPlugin, CAPBridgedPlugin {
     private static let watchdogVoicedMaxMs: Double = 5000
     private var watchdogVoicedMs: Double = 0
     private var watchdogPending = false
+
+    // Proactive task-age rotation (engine surgery items 2/3/5): a
+    // recognition task is retired BEFORE it ages into transcript
+    // regurgitation (B.4 recurrence: an 81-token re-emission ~35s
+    // into the task, below the watchdog's radar — the watchdog never
+    // fired on that whole tape). The new task overlaps the old, the
+    // tap feeds BOTH requests during the overlap (zero word loss),
+    // and the old task's results stay accepted until a short deadline
+    // so its final flush isn't dropped. Server-assisted sessions
+    // rotate earlier (Apple's ~60s server task limit).
+    private static let rotationOverlapMs: Double = 1000
+    private static let retireDeadlineMs: Double = 2500
+    private var rotationAgeMs: Double { allowServer ? 40_000 : 45_000 }
+    private var retiringRequest: SFSpeechAudioBufferRecognitionRequest?
+    private var retiringTask: SFSpeechRecognitionTask?
+    private var retiringGeneration = 0     // 0 = none (generations start at 1)
+    private var retiringUntilMs: Double = 0
+    private var rotationTimer: DispatchWorkItem?
+    private var prewarmedRecognizer: SFSpeechRecognizer?
+    /** Wallclock anchor of each request's audio t=0, by generation —
+        a retiring task's final flush must ship ITS OWN anchor, not
+        the fresh task's (else timestamps land a rotation-age in the
+        future). meterLock-guarded. */
+    private var anchorByGen: [Int: Double] = [:]
     private var taskGeneration = 0
     private var currentRecognizer: SFSpeechRecognizer?
 
@@ -134,6 +159,41 @@ public class NativeSpeechPlugin: CAPPlugin, CAPBridgedPlugin {
     @objc func stop(_ call: CAPPluginCall) {
         stopAll()
         call.resolve()
+    }
+
+    /// Pre-warm at app launch (engine surgery item 4): front-load the
+    /// audio-session configuration and the recognizer/daemon spin-up
+    /// so the first arm reaches listening fast (history: 3.7–4.8s
+    /// cold starts). NO permission prompts here — auth stays at the
+    /// first arm; without it only the cheap parts warm.
+    @objc func prewarm(_ call: CAPPluginCall) {
+        let locale = call.getString("locale") ?? "en-US"
+        DispatchQueue.main.async {
+            // never reconfigure the audio session under a LIVE engine —
+            // a category change mid-capture can stop the tap silently
+            guard !self.isActive else {
+                call.resolve(["detail": "skipped: session active"])
+                return
+            }
+            _ = try? self.configureAudioSession()
+            let rec = SFSpeechRecognizer(locale: Locale(identifier: locale))
+            self.prewarmedRecognizer = rec
+            var warmed = "session"
+            if SFSpeechRecognizer.authorizationStatus() == .authorized,
+               let rec = rec, rec.isAvailable, rec.supportsOnDeviceRecognition {
+                // a zero-audio dummy task spins up the daemon + model;
+                // it errors out harmlessly (no audio) and is cancelled
+                let req = SFSpeechAudioBufferRecognitionRequest()
+                req.requiresOnDeviceRecognition = true
+                req.shouldReportPartialResults = false
+                let t = rec.recognitionTask(with: req) { _, _ in }
+                req.endAudio()
+                DispatchQueue.main.asyncAfter(deadline: .now() + 3) { t.cancel() }
+                warmed = "session+recognizer+model"
+            }
+            self.emitStatus("prewarmed", detail: "\(locale) \(warmed)")
+            call.resolve(["detail": "\(locale) \(warmed)"])
+        }
     }
 
     private func setInactive() {
@@ -221,7 +281,9 @@ public class NativeSpeechPlugin: CAPPlugin, CAPBridgedPlugin {
 
     private func startRecognizer() {
         guard isActive else { return } // stopped before start finished
-        guard let recognizer = SFSpeechRecognizer(locale: Locale(identifier: localeId)) else {
+        let prewarmed = prewarmedRecognizer?.locale.identifier == Locale(identifier: localeId).identifier
+            ? prewarmedRecognizer : nil
+        guard let recognizer = prewarmed ?? SFSpeechRecognizer(locale: Locale(identifier: localeId)) else {
             emitStatus("unavailable", detail: "no recognizer exists for \(localeId)")
             return
         }
@@ -265,6 +327,10 @@ public class NativeSpeechPlugin: CAPPlugin, CAPBridgedPlugin {
             return
         }
         currentRecognizer = recognizer
+        // readiness gate: the armed UI shows "warming" until the tap
+        // delivers the FIRST real buffer ('listening' is emitted from
+        // the tap-confirmed path, never assumed)
+        emitStatus("warming", detail: "audio engine + recognizer spin-up")
         armListeningConfirmation(detail: "recognizer")
         input.removeTap(onBus: 0)
         input.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak self] buffer, _ in
@@ -275,10 +341,12 @@ public class NativeSpeechPlugin: CAPPlugin, CAPBridgedPlugin {
                 if self.anchorPending {
                     self.anchorPending = false
                     self.sessionStartEpochMs = Date().timeIntervalSince1970 * 1000
+                    self.anchorByGen[self.taskGeneration] = self.sessionStartEpochMs
                 }
                 self.meterLock.unlock()
             }
             self.request?.append(buffer)
+            self.retiringRequest?.append(buffer)
         }
         audioEngine.prepare()
         do {
@@ -323,9 +391,22 @@ public class NativeSpeechPlugin: CAPPlugin, CAPBridgedPlugin {
             endedAtEpochMs = 0
         }
 
-        task = recognizer.recognitionTask(with: req) { [weak self] result, error in
+        // proactive rotation: retire this task before regurgitation age
+        rotationTimer?.cancel()
+        let rot = DispatchWorkItem { [weak self] in
             guard let self = self, self.isActive,
                   gen == self.liveGeneration() else { return }
+            self.rotateTask(reason: "task-age \(Int(self.rotationAgeMs))ms")
+        }
+        rotationTimer = rot
+        DispatchQueue.main.asyncAfter(deadline: .now() + rotationAgeMs / 1000.0, execute: rot)
+
+        task = recognizer.recognitionTask(with: req) { [weak self] result, error in
+            guard let self = self, self.isActive else { return }
+            let live = gen == self.liveGeneration()
+            // a retiring task's results stay accepted until its
+            // deadline — its final flush must not be dropped
+            guard live || self.isRetiringGen(gen) else { return }
             if let result = result {
                 var words: [String] = []
                 var ends: [Double] = []
@@ -341,7 +422,7 @@ public class NativeSpeechPlugin: CAPPlugin, CAPBridgedPlugin {
                         ends.append(end)
                     }
                 }
-                if !words.isEmpty {
+                if !words.isEmpty && live {
                     self.wordsThisSession = true
                     self.consecutiveFailures = 0
                     // results are flowing — the watchdog stands down
@@ -349,12 +430,18 @@ public class NativeSpeechPlugin: CAPPlugin, CAPBridgedPlugin {
                     self.watchdogVoicedMs = 0
                     self.meterLock.unlock()
                 }
-                self.emitWords(words, ends: ends, isFinal: result.isFinal, engine: "recognizer")
+                self.emitWords(words, ends: ends, isFinal: result.isFinal, engine: "recognizer", gen: gen)
             }
-            if let error = error {
+            if let error = error, live {
                 self.emitStatus("error", detail: "recognition task: \(error.localizedDescription)")
             }
             if error != nil || (result?.isFinal ?? false) {
+                if !live {
+                    // a retiring task ended (final flush or cancel) —
+                    // clean up; never counts as a failure
+                    DispatchQueue.main.async { self.clearRetiring(gen: gen) }
+                    return
+                }
                 // A session that produced no words and died is a failure:
                 // back off exponentially and give up after a few — a hot
                 // restart loop is silence pretending to work.
@@ -403,27 +490,90 @@ public class NativeSpeechPlugin: CAPPlugin, CAPBridgedPlugin {
         let bufMs = buffer.format.sampleRate > 0
             ? Double(buffer.frameLength) / buffer.format.sampleRate * 1000 : 0
         var fireMs: Double = 0
+        var fireGen = 0
         meterLock.lock()
         if request != nil && rms >= Self.vadVoiceRms {
             watchdogVoicedMs += bufMs
             if watchdogVoicedMs >= Self.watchdogVoicedMaxMs && !watchdogPending {
                 watchdogPending = true
                 fireMs = watchdogVoicedMs
+                fireGen = taskGeneration
             }
         }
         meterLock.unlock()
         reportLevel(rms: rms)
         if fireMs > 0 {
-            DispatchQueue.main.async { self.watchdogRestart(voicedMs: fireMs) }
+            // generation-stamped: if a rotation lands before this queued
+            // closure runs, the restart is stale and must not double-
+            // rotate inside the retire window
+            DispatchQueue.main.async { self.watchdogRestart(voicedMs: fireMs, gen: fireGen) }
+        }
+    }
+
+    /// Retire the live task and spawn a FRESH one, with overlap: the
+    /// tap feeds both requests for rotationOverlapMs, the old task's
+    /// results stay accepted until retireDeadlineMs, then it is
+    /// cancelled. Used by proactive age rotation AND the watchdog
+    /// (fresh-task-per-watchdog replaces resuscitation).
+    private func rotateTask(reason: String) {
+        guard isActive, request != nil, let recognizer = currentRecognizer else { return }
+        emitStatus("rotating", detail: reason)
+        let now = Date().timeIntervalSince1970 * 1000
+        meterLock.lock()
+        retiringGeneration = taskGeneration
+        retiringUntilMs = now + Self.retireDeadlineMs
+        meterLock.unlock()
+        // unpublish FIRST: between these assignments a tap buffer may
+        // miss both requests (~21ms, inaudible) — the reverse order
+        // would double-append it to the same request via two aliases
+        let oldRequest = request
+        let oldTask = task
+        request = nil
+        task = nil
+        retiringRequest = oldRequest
+        retiringTask = oldTask
+        spawnRecognitionTask(recognizer)
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.rotationOverlapMs / 1000.0) { [weak self] in
+            self?.retiringRequest?.endAudio()
+            self?.retiringRequest = nil
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.retireDeadlineMs / 1000.0) { [weak self] in
+            guard let self = self else { return }
+            self.retiringTask?.cancel()
+            self.retiringTask = nil
+            self.meterLock.lock()
+            if Date().timeIntervalSince1970 * 1000 >= self.retiringUntilMs {
+                self.retiringGeneration = 0
+            }
+            self.meterLock.unlock()
+        }
+    }
+
+    private func isRetiringGen(_ gen: Int) -> Bool {
+        meterLock.lock()
+        defer { meterLock.unlock() }
+        return gen == retiringGeneration && retiringGeneration != 0
+            && Date().timeIntervalSince1970 * 1000 < retiringUntilMs
+    }
+
+    private func clearRetiring(gen: Int) {
+        meterLock.lock()
+        let matches = gen == retiringGeneration
+        if matches { retiringGeneration = 0 }
+        meterLock.unlock()
+        if matches {
+            retiringTask = nil
+            retiringRequest = nil
         }
     }
 
     /// The task has been fed ≥5s of voiced audio and returned nothing:
-    /// tear it down and respawn. The generation bump makes the
-    /// cancelled task's completion handler a no-op (no double spawn,
-    /// no failure count — this is a recovery, not a crash).
-    private func watchdogRestart(voicedMs: Double) {
-        guard isActive, request != nil, let recognizer = currentRecognizer else {
+    /// hand it a FRESH task via the rotation machinery (overlap keeps
+    /// buffer continuity; the wedged task is cancelled after its
+    /// deadline; no failure count — this is a recovery, not a crash).
+    private func watchdogRestart(voicedMs: Double, gen: Int) {
+        guard isActive, request != nil, currentRecognizer != nil,
+              gen == liveGeneration() else {
             meterLock.lock()
             watchdogPending = false
             watchdogVoicedMs = 0
@@ -431,18 +581,9 @@ public class NativeSpeechPlugin: CAPPlugin, CAPBridgedPlugin {
             return
         }
         emitStatus("restarting",
-                   detail: "watchdog: \(Int(voicedMs))ms voiced speech, zero fresh tokens")
+                   detail: "watchdog: \(Int(voicedMs))ms voiced speech, zero fresh tokens — fresh task")
         endedAtEpochMs = Date().timeIntervalSince1970 * 1000
-        // orphan the dying task BEFORE cancelling: its completion must
-        // fail the generation gate, or it counts a failure and
-        // schedules a second respawn on top of ours
-        meterLock.lock()
-        taskGeneration += 1
-        meterLock.unlock()
-        task?.cancel()
-        task = nil
-        request = nil
-        spawnRecognitionTask(recognizer)
+        rotateTask(reason: "watchdog \(Int(voicedMs))ms voiced, zero tokens")
     }
 
     private func liveGeneration() -> Int {
@@ -506,10 +647,12 @@ public class NativeSpeechPlugin: CAPPlugin, CAPBridgedPlugin {
 
     // MARK: - shared emission (also used by the analyzer engine)
 
-    func emitWords(_ words: [String], ends: [Double], isFinal: Bool, engine: String) {
-        // the audio thread owns anchor writes — read under the lock
+    func emitWords(_ words: [String], ends: [Double], isFinal: Bool, engine: String, gen: Int = 0) {
+        // the audio thread owns anchor writes — read under the lock.
+        // A generation's words carry that generation's OWN anchor: a
+        // retiring task's flush must not borrow the fresh task's.
         meterLock.lock()
-        let anchor = sessionStartEpochMs
+        let anchor = gen > 0 ? (anchorByGen[gen] ?? sessionStartEpochMs) : sessionStartEpochMs
         meterLock.unlock()
         notifyListeners("words", data: [
             "words": words,
@@ -517,6 +660,11 @@ public class NativeSpeechPlugin: CAPPlugin, CAPBridgedPlugin {
             "isFinal": isFinal,
             "sessionStartEpochMs": anchor,
             "engine": engine,
+            // stream tag: the JS diff keeps one transcript PER task —
+            // rotation-overlap words from two tasks must never
+            // interleave into one stream (that would re-create the
+            // regurgitation the rotation exists to prevent)
+            "gen": gen,
         ])
     }
 
@@ -566,6 +714,15 @@ public class NativeSpeechPlugin: CAPPlugin, CAPBridgedPlugin {
         taskGeneration += 1
         meterLock.unlock()
         currentRecognizer = nil
+        rotationTimer?.cancel()
+        rotationTimer = nil
+        retiringTask?.cancel()
+        retiringTask = nil
+        retiringRequest = nil
+        meterLock.lock()
+        retiringGeneration = 0
+        anchorByGen.removeAll()
+        meterLock.unlock()
         task?.cancel()
         task = nil
         request = nil

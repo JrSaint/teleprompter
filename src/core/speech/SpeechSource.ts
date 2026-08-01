@@ -8,6 +8,8 @@
 export type SpeechStatus =
   | 'idle'
   | 'starting'
+  /** readiness gate: engine spin-up begun, no real buffer yet */
+  | 'warming'
   | 'listening'
   | 'restarting'
   | 'stopped'
@@ -19,6 +21,10 @@ export type SpeechStatus =
   // (buffer-resolution, epoch ms in detail) after a quiet stretch —
   // the emission-lag fallback when segment timings are zeroed.
   // Not mic-state changes.
+  /** proactive task rotation / watchdog fresh-task (side-channel) */
+  | 'rotating'
+  /** launch pre-warm completed (side-channel) */
+  | 'prewarmed'
   | 'env'
   | 'level'
   | 'voice-onset';

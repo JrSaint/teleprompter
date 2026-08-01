@@ -32,6 +32,12 @@ const DEFAULTS: MatcherConfig = {
   leadMode: false,
 };
 
+/** Re-emission batch heuristic: one arrival with at least this many
+    tokens, of which at least this fraction restate already-consumed
+    forms, is the engine regurgitating its transcript. */
+export const REEMISSION_MIN_TOKENS = 8;
+export const REEMISSION_RESTATED_PCT = 0.6;
+
 /** Which rule moved the display — recorded per decision for tuning. */
 export type MatchRule =
   | 'lead'             // lead mode: all content words except the final consumed
@@ -285,6 +291,30 @@ export class PhraseMatcher {
     let matchedAny = false;
     let contentHits = 0;
     let lastWordMatched = false;
+    // Re-emission guard (engine surgery item 1): a large arrival that
+    // mostly RESTATES already-consumed forms is the engine re-emitting
+    // its transcript, not the speaker moving. Such words may confirm
+    // and absorb, but must never LAUNCH a jump — the PT recurrence
+    // tape's 81-token regurgitation far-skipped the display four
+    // phrases on re-emitted phrase-7/8 words (spurious 12→15→16).
+    // Jumps during a re-emission feed need evidence that predates the
+    // feed or comes from FRESH forms inside it (a legitimate skip
+    // recovery often rides a partial re-emission batch — the b4-EN
+    // far-skip's "pick up right" tail must keep working).
+    const normed: string[] = [];
+    for (const raw of words) {
+      const n = normalizeWord(raw);
+      if (n) normed.push(this.cfg.aliases?.get(n) ?? n);
+    }
+    const restated = normed.filter((n) => this.consumed.has(n)).length;
+    // A post-restart catch-up flush legitimately re-delivers spoken
+    // words in consumed forms — the grace window exists for exactly
+    // that recovery, so it is exempt from the guard.
+    const reEmission =
+      !opts.grace &&
+      normed.length >= REEMISSION_MIN_TOKENS &&
+      restated >= normed.length * REEMISSION_RESTATED_PCT;
+    const consumedBefore = reEmission ? new Set(this.consumed) : null;
     for (const raw of words) {
       let w = normalizeWord(raw);
       if (!w || this.finished) continue;
@@ -300,6 +330,9 @@ export class PhraseMatcher {
         if (hit >= 0) {
           this.leftover.splice(hit, 1);
           if (this.leftover.length === 0) this.leftover = null;
+          // an absorbed tail word is consumed like any match — its
+          // re-emissions must count as restatements, not fresh forms
+          this.consumed.add(w);
           matchedAny = true; // it's script speech, just already accounted
           lastWordMatched = true;
           continue;
@@ -325,7 +358,17 @@ export class PhraseMatcher {
         this.touchedCurrent = true;
         if (this.phrases[this.current].contentIdx.includes(curIdx)) contentHits++;
       }
-      for (let p = this.current + 1; p <= windowEnd; p++) {
+      // Re-emission guard (engine surgery item 1): inside a
+      // regurgitation batch, a restated form may confirm the CURRENT
+      // phrase and absorb leftovers — but it banks NOTHING ahead.
+      // Letting it into the lookahead window both fueled spurious
+      // jumps (the PT recurrence 12→15) and pre-completed phrases
+      // ahead, wedging the far-skip gate on a phrase the speaker
+      // never read while it was current. Fresh forms keep full
+      // lookahead rights — a legitimate skip recovery often rides
+      // the tail of a partial re-emission batch.
+      const bankAhead = !consumedBefore || !consumedBefore.has(w);
+      for (let p = bankAhead ? this.current + 1 : windowEnd + 1; p <= windowEnd; p++) {
         // A word the current phrase already explains may still
         // exact-match ahead (genuinely repeated words) but must not
         // fuzzy-BANK lookahead credit: "and" exact-hit its own phrase

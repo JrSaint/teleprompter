@@ -13,11 +13,15 @@ import { diag } from '../diag';
  */
 
 interface WordsEvent {
-  words: string[];        // FULL session transcript so far
-  audioEndMs: number[];   // per-word audio end, ms since session start
+  words: string[];        // FULL transcript of ONE recognition task
+  audioEndMs: number[];   // per-word audio end, ms since request start
   isFinal: boolean;
   sessionStartEpochMs: number;
   engine: string;         // 'analyzer' | 'recognizer'
+  /** recognition-task generation — rotation overlap runs two tasks
+      whose transcripts must be diffed SEPARATELY (absent on older
+      builds / the analyzer: treated as one stream). */
+  gen?: number;
 }
 
 interface StatusEvent {
@@ -27,6 +31,7 @@ interface StatusEvent {
 
 interface NativeSpeechPlugin {
   start(options: { locale: string; vocabulary: string[]; allowServer?: boolean }): Promise<void>;
+  prewarm(options: { locale: string }): Promise<{ detail?: string } | void>;
   stop(): Promise<void>;
   addListener(event: 'words', cb: (e: WordsEvent) => void): Promise<PluginListenerHandle>;
   addListener(event: 'status', cb: (e: StatusEvent) => void): Promise<PluginListenerHandle>;
@@ -42,7 +47,11 @@ export class NativeSpeechSource implements SpeechSource {
   onWords?: SpeechSource['onWords'];
   onStatus?: (status: SpeechStatus, detail?: string) => void;
 
-  private emitted: string[] = [];
+  /** per-generation transcripts: during rotation overlap two tasks
+      emit concurrently; diffing them against ONE transcript would
+      interleave and re-create the exact regurgitation the rotation
+      prevents (adversarial-verify blocker). */
+  private emittedByGen = new Map<number, string[]>();
   private handles: PluginListenerHandle[] = [];
   private active = false;
 
@@ -52,7 +61,7 @@ export class NativeSpeechSource implements SpeechSource {
       return;
     }
     this.active = true;
-    this.emitted = [];
+    this.emittedByGen.clear();
     // labeled so tapes can distinguish the JS-layer announcement from
     // the plugin's own start (they are two events, not two starts)
     this.onStatus?.('starting', 'js');
@@ -82,14 +91,21 @@ export class NativeSpeechSource implements SpeechSource {
             ends.push(e.audioEndMs[i] ?? 0);
           }
         });
-        const prefix = stablePrefixLength(this.emitted, words);
+        const gen = e.gen ?? 0;
+        const emitted = this.emittedByGen.get(gen) ?? [];
+        const prefix = stablePrefixLength(emitted, words);
         const fresh = words.slice(prefix);
         // A revision re-emits the transcript's unchanged tail as
         // "fresh" with its ORIGINAL audio times — lag computed from
         // those is re-statement age, not engine latency. Only pure
         // appends measure.
-        const pureAppend = prefix === this.emitted.length;
-        this.emitted = words;
+        const pureAppend = prefix === emitted.length;
+        this.emittedByGen.set(gen, words);
+        // rotation retires generations quickly — keep the two newest
+        if (this.emittedByGen.size > 2) {
+          const gens = [...this.emittedByGen.keys()].sort((a, b) => a - b);
+          while (gens.length > 2) this.emittedByGen.delete(gens.shift()!);
+        }
         if (fresh.length === 0) return;
         // audio anchor mapped onto the performance.now() timeline
         const arrival = performance.now();
@@ -113,7 +129,7 @@ export class NativeSpeechSource implements SpeechSource {
         // the plugin's own trailing 'stopped' (and any late noise)
         // would double up in the tape
         if (!this.active) return;
-        if (e.status === 'restarting') this.emitted = [];
+        if (e.status === 'restarting') this.emittedByGen.clear();
         if (e.status === 'restart-gap' && e.detail) {
           diag.restartGap(Number(e.detail));
           return;
@@ -135,4 +151,20 @@ export class NativeSpeechSource implements SpeechSource {
     this.handles = [];
     this.onStatus?.('stopped');
   }
+}
+
+/** Launch pre-warm (engine surgery item 4): front-load audio-session
+    config + recognizer/daemon spin-up so the first arm reaches
+    listening fast. Fire-and-forget; a web platform (no plugin)
+    rejects and is ignored. */
+export function prewarmNativeSpeech(locale: string): void {
+  NativeSpeech.prewarm({ locale })
+    .then((r) => {
+      // boot-time event listeners don't exist yet — the overlay's
+      // event feed is the one place the warm depth stays visible
+      diag.event(`prewarm: ${(r as { detail?: string } | void)?.detail ?? 'done'}`);
+    })
+    .catch(() => {
+      /* not on the native platform — nothing to warm */
+    });
 }

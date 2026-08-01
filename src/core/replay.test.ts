@@ -464,7 +464,10 @@ import ptLadder from './fixtures/rigtest-pt-ladder-b34-2026-07-31.json';
 describe.each([
   // [name, log, ad-lib window, expect far-skip, expect finished]
   ['en-karaoke', enKaraoke as unknown as SessionLog, [31400, 35608], true, true],
-  ['en-ladder', enLadder as unknown as SessionLog, [27500, 32658], true, true],
+  // en-ladder's recorded finish was a SPURIOUS far-skip 21→24 on
+  // re-emitted words (phrases 21–23 never spoken) — the re-emission
+  // guard refuses it, so replay holds the last true position
+  ['en-ladder', enLadder as unknown as SessionLog, [27500, 32658], true, false],
   ['pt-karaoke', ptKaraoke as unknown as SessionLog, [24812, 38459], true, false],
   ['pt-ladder', ptLadder as unknown as SessionLog, [37200, 43067], false, false],
 ] as const)('b34 verdict tape %s', (_name, log, adlib, hasSkip, finished) => {
@@ -485,13 +488,17 @@ describe.each([
     expect(r.moves.some((m) => m.rule === 'far-skip')).toBe(hasSkip);
   });
 
-  it(finished ? 'replays to finished' : 'aborted read replays to the recorded position', () => {
+  it(finished ? 'replays to finished' : 'read replays to the last true position', () => {
     if (finished) {
       expect(r.finished).toBe(true);
     } else {
-      const liveMax = Math.max(
-        ...log.events.filter((e) => e.kind === 'decision').map((e) => e.to),
-      );
+      // spurious-finish tapes (see SPURIOUS_FINISH) replay to the last
+      // TRUE position; genuinely aborted tapes to the recorded max
+      const liveMax =
+        SPURIOUS_FINISH.get(`rigtest-${_name}-b34-2026-07-31.json`) ??
+        Math.max(
+          ...log.events.filter((e) => e.kind === 'decision').map((e) => e.to),
+        );
       expect(r.finalIndex).toBeGreaterThanOrEqual(liveMax);
     }
   });
@@ -506,6 +513,17 @@ describe.each([
     }
   });
 });
+
+/* Tapes whose recorded "finished" state was reached by a SPURIOUS
+   jump the re-emission guard now refuses (engine surgery item 1).
+   The b34 EN-ladder read ended on far-skip 21→24 whose entire
+   evidence was re-emitted phrase-8/10 words ("when you're done" →
+   "and you are done.") — phrases 21–23 were never spoken. Replay
+   correctly holds the founder's last true position instead. */
+const SPURIOUS_FINISH = new Map([
+  // tape name → the founder's last TRUE position (before the jump)
+  ['rigtest-en-ladder-b34-2026-07-31.json', 21],
+]);
 
 /* Real rig-session fixtures: drop "Copy log" JSON into ./fixtures and
    every file is replayed against the regression contract. */
@@ -525,7 +543,11 @@ describe.skipIf(realFixtures.length === 0)('real rig fixtures', () => {
       const tapeFinished = log.events.some(
         (e) => e.kind === 'state' && e.state === 'finished',
       );
-      if (tokenCount > 0 && tapeFinished) {
+      const lastTrue = SPURIOUS_FINISH.get(_name);
+      if (lastTrue !== undefined) {
+        expect(r.finalIndex).toBeGreaterThanOrEqual(lastTrue);
+        expect(r.moves.some((m) => m.rule === 'far-skip' && m.to === 24)).toBe(false);
+      } else if (tokenCount > 0 && tapeFinished) {
         // logs recorded before B.2 don't say which swap timing they ran
         // with — accept a finish in either mode for those
         const finished =
@@ -549,4 +571,29 @@ describe.skipIf(realFixtures.length === 0)('real rig fixtures', () => {
       }
     },
   );
+});
+
+/* Engine surgery item 1 — re-emission guard. The PT recurrence tape's
+   81-token transcript regurgitation (t=56938) far-skipped the live
+   display 12→15→16 on re-emitted phrase-7/8 words (phrase 16's own
+   words appear nowhere in that batch). With the guard, jumps may not
+   LAUNCH on evidence sourced from a re-emission batch: the replay
+   must hold phrase 12 through the regurgitation and only move on
+   fresh evidence — and still reach the end of the tape. */
+import ptRecurrence from './fixtures/rigtest-pt-dropout-recurrence-2026-07-31.json';
+
+describe('re-emission guard (B.4 recurrence)', () => {
+  it('never launches the spurious 12→15 far-skip; still finishes', () => {
+    const r = replaySession(ptRecurrence as unknown as SessionLog);
+    // the spurious jump landed ON phrase 15 (from 12); a legitimate
+    // later far-skip lands on 16 via the founder's fresh post-batch
+    // words, so absence of any far-skip TO 15 is the guard's proof
+    const spurious = r.moves.filter(
+      (m) => m.rule === 'far-skip' && m.to === 15,
+    );
+    expect(spurious).toHaveLength(0);
+    // the display holds 12 until FRESH evidence arrives (the founder's
+    // own post-batch words), then follows through to the tape's end
+    expect(r.finished).toBe(true);
+  });
 });

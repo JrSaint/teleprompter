@@ -164,6 +164,12 @@ export class PrompterController {
         diag.setLevel(Number(detail));
         return;
       }
+      if (s === 'rotating' || s === 'prewarmed') {
+        // task lifecycle side-channel: recorded for the tapes (the
+        // rotation hypothesis needs them), never a mic-state change
+        this.recorder.mic(s, detail);
+        return;
+      }
       if (s === 'voice-onset') {
         // buffer-resolution voice-activity onset (epoch ms) — the
         // emission-lag fallback: correlated with the next fresh token
