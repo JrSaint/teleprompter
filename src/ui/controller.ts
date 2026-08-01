@@ -17,10 +17,14 @@ const HOLD_AFTER_MS = FLOW_HOLD_MS;
 const GRACE_MS = 2000;
 /** Stall self-heal: holding at least this long with next-phrase evidence. */
 const HEAL_AFTER_MS = 4000;
-/** Minimum visible dwell per phrase — within one clump AND across
-    feeds (B.3.3 finding 4: back-to-back advances 166–500ms apart read
-    as a lurch). Display stepping only; decision logs are unchanged. */
-const STEP_DWELL_MS = 250;
+/** Render-quiet window: an advance arriving within this of the last
+    render defers (and later arrivals collapse into it) — one settled
+    transition instead of a double-pump. Widened 250→400ms in B.3.6:
+    the flash audit found advance pairs at 250–400ms rendering as two
+    back-to-back transitions, the second landing while the first's
+    crossfade + refill were still settling. Display stepping only;
+    decision logs are unchanged. */
+const STEP_DWELL_MS = 400;
 /** Throttled autosave of the in-flight session log. */
 const AUTOSAVE_MS = 5000;
 

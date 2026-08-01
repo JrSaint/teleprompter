@@ -37,6 +37,17 @@ export type SessionEvent =
   | { t: number; kind: 'mic'; status: string; detail?: string }
   | { t: number; kind: 'state'; state: string }
   | {
+      t: number; kind: 'render';
+      /** 'target': slot assignments+tiers the render intends;
+          'settled': actual DOM text+opacity ~600ms later (skipped if
+          a newer render supersedes it). Decisions say where the
+          matcher went; render events say what the SCREEN did —
+          display-truth bugs are invisible without them (B.3.6). */
+      phase: 'target' | 'settled';
+      active: number;
+      slots: Array<{ p: number; tier: number; text?: string }>;
+    }
+  | {
       t: number; kind: 'summary';
       /** per listening stretch; `invalid` = excluded stale s2s pairs */
       speechToSwap: { count: number; medianMs: number; p90Ms: number; invalid?: number };
@@ -175,6 +186,14 @@ export class FlightRecorder {
       ...(boundaryLag ? { boundaryLag } : {}),
       ...(this.log ? { sessionId: this.log.id } : {}),
     });
+  }
+
+  render(
+    phase: 'target' | 'settled',
+    active: number,
+    slots: Array<{ p: number; tier: number; text?: string }>,
+  ): void {
+    this.push({ kind: 'render', phase, active, slots });
   }
 
   mic(status: string, detail?: string): void {

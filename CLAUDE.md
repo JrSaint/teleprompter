@@ -30,7 +30,10 @@ shell with a custom Swift NativeSpeech plugin. Tests: `npx vitest run`.
 - Work in sprints from the founder's briefs; verify tape findings
   against source before fixing; stop at declared stop points.
 - Real rig session logs become fixtures in `src/core/fixtures/` and
-  replay in the suite. Diagnostics must be on-screen (D overlay) —
+  replay in the suite. Render truth (B.3.6): every prompter render
+  logs `render` events (target + settled slot snapshots); the suite
+  asserts the active phrase's slot is at the 100% tier on every tape
+  that carries them. Diagnostics must be on-screen (D overlay) —
   no console on the rig iPad.
 - Device truth: the only hardware is iPad12,1 — SFSpeechRecognizer is
   the product path; SpeechAnalyzer validates in the simulator only.

@@ -155,11 +155,15 @@ export function createPrompterView(
       slotSwapTimers[k] = null;
     }
     const el = slotEls[k];
-    const to = target === null ? '0' : String(brightnessFor(target - phraseIndex));
+    const tier = () => (target === null ? '0' : String(brightnessFor(target - phraseIndex)));
+    const to = tier();
     const put = () => {
       slotSwapTimers[k] = null;
       renderPhrase(el, target === null ? null : phrases[target]);
-      fadeTo(el, '0', to);
+      // tier recomputed at fire time: a put scheduled before an advance
+      // must land at the slot's CURRENT role — the captured value left
+      // the active line at a faded tier (B.3.6 finding)
+      fadeTo(el, '0', tier());
     };
     slotShows[k] = target ?? -1;
     if (!animate) {
@@ -212,6 +216,34 @@ export function createPrompterView(
       refillTimer = null;
       syncSlots(true);
     }
+  };
+
+  /** Render truth on tape (B.3.6): every render logs its intended
+      slot assignments+tiers, and ~600ms later (puts + refill + fades
+      done) the ACTUAL DOM text+opacity — unless a newer render
+      superseded it. The harness asserts the active phrase's slot sits
+      at the 100% tier with the right text. */
+  let renderSeq = 0;
+  const logRender = () => {
+    const seq = ++renderSeq;
+    const active = phraseIndex;
+    controller.recorder.render(
+      'target', active,
+      slotShows.slice(0, SLOTS).map((p) => ({
+        p, tier: p < 0 ? 0 : brightnessFor(p - active),
+      })),
+    );
+    setTimeout(() => {
+      if (seq !== renderSeq) return;
+      controller.recorder.render(
+        'settled', active,
+        slotEls.slice(0, SLOTS).map((el, k) => ({
+          p: slotShows[k],
+          tier: Math.round((parseFloat(getComputedStyle(el).opacity) || 0) * 100) / 100,
+          text: (el.textContent ?? '').slice(0, 24),
+        })),
+      );
+    }, REFILL_DELAY_MS + SWAP_FADE_MS + 100);
   };
 
   const diagBody = $('vp-diag-body');
@@ -316,6 +348,15 @@ export function createPrompterView(
             fadeCurrent(slotEls[(i + 1) % SLOTS], String(settings.previewOpacity));
           }
           const vacated = prev % SLOTS;
+          // a pending two-phase put on the vacated slot would pop its
+          // new content back up mid-vacate and the refill would then
+          // double-pump it (B.3.6 flash audit) — cancel it; the refill
+          // re-syncs this slot from scratch
+          const orphan = slotSwapTimers[vacated];
+          if (orphan) {
+            clearTimeout(orphan);
+            slotSwapTimers[vacated] = null;
+          }
           fadeCurrent(slotEls[vacated], '0');
           slotShows[vacated] = -1; // stale content, refill pending
           scheduleRefill();
@@ -326,6 +367,7 @@ export function createPrompterView(
         }
       }
       paintStatus();
+      logRender();
     },
     onFlow: (s) => {
       flowState = s;

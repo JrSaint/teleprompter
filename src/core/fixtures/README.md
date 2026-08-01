@@ -65,3 +65,13 @@ The flow tape carries the first live flow-predict (t=20117, rate 425ms,
 one phrase beyond evidence, outside the ad-lib) and a sessionId-stamped
 summary. The lead tape shows the EN cold-launch stall class: ~4.8s to
 listening and the whole first sentence consumed but never emitted.
+
+## B.3.6 confirmation tapes (2026-07-31)
+
+`rigtest-en-confirm-b35-2026-07-31.json` (Flow, finished, 2
+display-collapsed + 52 flow-rail lines on tape) and
+`rigtest-pt-probe-b35-2026-07-31.json` (Lead, finished, ZERO dropouts
+>3s vs 3.4–11.3s in the b34 PT tapes — first clean PT read since the
+degradation began). Recorded before render events existed; tapes from
+the B.3.6 build onward carry `render` events and are covered by the
+render-truth assertion in `render.test.ts`.
