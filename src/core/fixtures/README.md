@@ -75,3 +75,15 @@ display-collapsed + 52 flow-rail lines on tape) and
 degradation began). Recorded before render events existed; tapes from
 the B.3.6 build onward carry `render` events and are covered by the
 render-truth assertion in `render.test.ts`.
+
+## B.4 acceptance + PT recurrence (2026-07-31)
+
+`rigtest-en-b4-acceptance-2026-07-31.json` — the B.4 checklist tape
+(Flow, finished, first render-event-carrying tape: 49 render events,
+zero render-truth violations). `rigtest-pt-dropout-recurrence-2026-07-31.json`
+— the recurrence probe: zero watchdogs, but an 81-token whole-transcript
+re-emission at t=56938 triggered a SPURIOUS far-skip 12→15→16 (evidence
+was re-emitted phrase-7/8 words; phrase 16's own words appear nowhere in
+the batch), plus a 13.5s re-orientation window with 3 zero-token voice
+onsets. Second-voice series naming (Erika): `rigtest-pt-erika-<tag>-<date>.json`
+for rig probes, `take-<script-id>-<voice>-<n>-<date>.json` for real takes.

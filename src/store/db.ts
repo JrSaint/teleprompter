@@ -37,6 +37,9 @@ export interface Settings {
       to the top — the B.3.4 A/B verdict, "far preferred") or karaoke
       (2 slots, alternating). */
   displayMode: 'karaoke' | 'ladder';
+  /** pt-BR ship-gate fallback (no UI — dev flag): server-assisted
+      recognition for PT only. EN stays fully on-device, always. */
+  ptServerAssisted?: boolean;
 }
 
 export const DEFAULT_SETTINGS: Settings = {

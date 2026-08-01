@@ -24,6 +24,38 @@ shell with a custom Swift NativeSpeech plugin. Tests: `npx vitest run`.
 - Prompter typography: current and next line at the SAME
   distance-derived size, one block, emphasis by brightness only;
   never wrap mid-phrase (per-script width-fit cap).
+- The validated reading surface — ladder slots, 100/60/35 tiers,
+  crossfade + collapse behavior — is FROZEN; design polish touches
+  chrome only. The diagnostics overlay ships hidden behind a
+  developer setting, never user-visible by default.
+
+## Ship gate (launch scope)
+
+- PT ships WITH EN — same build, same day. PT engine ladder, in
+  order: (a) lifecycle surgery (fresh task per watchdog, task age
+  limit with proactive rotation, buffer continuity) — success bar:
+  cold-start PT read of a real-length script, zero dropout windows
+  >2s, zero abandonment, two consecutive sessions; (b) fallback:
+  server-assisted pt-BR (`allowServer` plugin option →
+  requiresOnDeviceRecognition=false, PT ONLY, dev flag
+  `ptServerAssisted`, no UI) with scheduled task rotation (~50s
+  server limit) + overlap so no words are lost, and per-language
+  privacy copy (EN fully on-device; PT via Apple servers, network
+  required). EN never leaves on-device — that design law stands.
+  Spike truth (B.4 sim, 2026-07-31): allowServer is wired end-to-end
+  (env logs `serverAssisted:true`, session reaches listening); the
+  SIMULATOR cannot finish the job — SFSpeechRecognizer's server
+  errors "Retry" (no Apple speech identity in sims) and
+  supportedLocales() is EMPTY there, so ALL recognition validation
+  is device-only. webkitSpeechRecognition inside the app's WKWebView
+  is NOT a valid fallback and must never be assumed: it is
+  present-but-MUTE — the API exists, reaches listening, and never
+  delivers a result (verified in the B.4 sim pass; a presence check
+  passes and still cannot prompt).
+- Final PT acceptance requires an Erika session (second voice):
+  real famous-minds script, her pace, in the rig. Fixture naming:
+  `rigtest-pt-erika-<tag>-<date>.json` for rig probes,
+  `take-<script-id>-<voice>-<n>-<date>.json` for real takes.
 
 ## Working agreement
 

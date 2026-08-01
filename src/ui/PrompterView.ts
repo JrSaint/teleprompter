@@ -376,7 +376,11 @@ export function createPrompterView(
       paintDiag(diag.snapshot());
     },
     onMic: (s, detail) => paintStatus(s, detail),
-  }, { mode: settings.swapTimingByLang[script.lang] ?? 'lead', header });
+  }, {
+    mode: settings.swapTimingByLang[script.lang] ?? 'lead',
+    header,
+    allowServer: script.lang === 'pt-BR' && settings.ptServerAssisted === true,
+  });
 
   const unsubDiag = diag.subscribe(paintDiag);
   diagEl.hidden = !settings.diagOverlay;

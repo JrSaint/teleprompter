@@ -44,7 +44,7 @@ export interface WordsMeta {
 export interface SpeechSource {
   /** Begin recognition. `vocabulary` primes engines that support it
       (script content words + alias targets); others ignore it. */
-  start(locale: string, vocabulary?: string[]): void;
+  start(locale: string, vocabulary?: string[], opts?: { allowServer?: boolean }): void;
   stop(): void;
   /**
    * Newly appended recognized words (sources de-duplicate interim

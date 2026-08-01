@@ -26,7 +26,7 @@ interface StatusEvent {
 }
 
 interface NativeSpeechPlugin {
-  start(options: { locale: string; vocabulary: string[] }): Promise<void>;
+  start(options: { locale: string; vocabulary: string[]; allowServer?: boolean }): Promise<void>;
   stop(): Promise<void>;
   addListener(event: 'words', cb: (e: WordsEvent) => void): Promise<PluginListenerHandle>;
   addListener(event: 'status', cb: (e: StatusEvent) => void): Promise<PluginListenerHandle>;
@@ -46,7 +46,7 @@ export class NativeSpeechSource implements SpeechSource {
   private handles: PluginListenerHandle[] = [];
   private active = false;
 
-  start(locale: string, vocabulary: string[] = []): void {
+  start(locale: string, vocabulary: string[] = [], opts: { allowServer?: boolean } = {}): void {
     if (!nativeSpeechAvailable()) {
       this.onStatus?.('unavailable', 'native engine requires the iPad app');
       return;
@@ -57,7 +57,7 @@ export class NativeSpeechSource implements SpeechSource {
     // the plugin's own start (they are two events, not two starts)
     this.onStatus?.('starting', 'js');
     void this.attach();
-    NativeSpeech.start({ locale, vocabulary }).catch((err) => {
+    NativeSpeech.start({ locale, vocabulary, allowServer: opts.allowServer === true }).catch((err) => {
       diag.event(`native speech start failed: ${String(err)}`);
       this.onStatus?.('error', String(err));
     });

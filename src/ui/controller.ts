@@ -78,6 +78,8 @@ export class PrompterController {
       (verify finding: the finished advance's rAF lands post-summary). */
   private stretchSeq = 0;
 
+  private allowServer = false;
+
   /** Flow mode: predictive swap machinery. */
   private flowEnabled = false;
   private flowModel = new FlowModel();
@@ -91,10 +93,17 @@ export class PrompterController {
     phrases: Phrase[],
     speech: SpeechSource,
     ev: ControllerEvents,
-    opts: { mode?: 'lead' | 'confirm' | 'flow'; header?: SessionHeader } = {},
+    opts: {
+      mode?: 'lead' | 'confirm' | 'flow';
+      header?: SessionHeader;
+      /** pt-BR ship-gate fallback (spike-gated, no UI): recognition
+          via Apple's servers instead of on-device. EN never sets it. */
+      allowServer?: boolean;
+    } = {},
   ) {
     this.phrases = phrases;
     const mode = opts.mode ?? 'lead';
+    this.allowServer = opts.allowServer === true;
     this.flowEnabled = mode === 'flow';
     const aliasMap = parseAliases(script.aliases);
     this.matcher = new PhraseMatcher(phrases, {
@@ -543,7 +552,7 @@ export class PrompterController {
     // overlay stats masked two whole reads (B.3.4 finding 1)
     diag.resetSession();
     this.flow.to('armed');
-    this.speech.start(this.locale, this.vocabulary);
+    this.speech.start(this.locale, this.vocabulary, { allowServer: this.allowServer });
     this.bumpHoldTimer();
   }
 

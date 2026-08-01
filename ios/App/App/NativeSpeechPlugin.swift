@@ -38,6 +38,10 @@ public class NativeSpeechPlugin: CAPPlugin, CAPBridgedPlugin {
     private var task: SFSpeechRecognitionTask?
     private var localeId = "en-US"
     private var vocabulary: [String] = []
+    /** Server-assisted recognition (ship-gate fallback, pt-BR only —
+        JS gates it): flips requiresOnDeviceRecognition off. Default
+        false; EN never sets it. */
+    private var allowServer = false
     private var sessionStartEpochMs: Double = 0
     private var endedAtEpochMs: Double = 0
     private var analyzerBox: AnyObject?
@@ -103,6 +107,7 @@ public class NativeSpeechPlugin: CAPPlugin, CAPBridgedPlugin {
         }
         localeId = call.getString("locale") ?? "en-US"
         vocabulary = call.getArray("vocabulary", String.self) ?? []
+        allowServer = call.getBool("allowServer") ?? false
         SFSpeechRecognizer.requestAuthorization { [weak self] auth in
             guard let self = self else { return }
             guard auth == .authorized else {
@@ -202,6 +207,7 @@ public class NativeSpeechPlugin: CAPPlugin, CAPBridgedPlugin {
             .joined(separator: ", ")
         return [
             "recordPermission": permission,
+            "serverAssisted": allowServer,
             "sessionCategory": session.category.rawValue,
             "sessionMode": session.mode.rawValue,
             "sessionSampleRate": session.sampleRate,
@@ -243,8 +249,11 @@ public class NativeSpeechPlugin: CAPPlugin, CAPBridgedPlugin {
         env.merge(sessionEnvFields()) { a, _ in a }
         emitEnv(env)
         // On-device policy: check BEFORE forcing it; never silently
-        // listen to nothing, never fall back to server-side here.
-        guard recognizer.supportsOnDeviceRecognition else {
+        // listen to nothing, never fall back to server-side on our own.
+        // The ONLY exception is an explicit allowServer start option
+        // (pt-BR ship-gate fallback) — the caller has shown the
+        // per-language privacy copy before asking for it.
+        guard recognizer.supportsOnDeviceRecognition || allowServer else {
             emitStatus("unavailable",
                        detail: "This iPad cannot run \(localeId) speech recognition on-device. The native engine never sends audio to servers, so it cannot continue. Use the Web engine for this script.")
             return
@@ -285,7 +294,7 @@ public class NativeSpeechPlugin: CAPPlugin, CAPBridgedPlugin {
         guard isActive else { return } // a stop won the race
         let req = SFSpeechAudioBufferRecognitionRequest()
         req.shouldReportPartialResults = true
-        req.requiresOnDeviceRecognition = true
+        req.requiresOnDeviceRecognition = !allowServer
         // B.3 engine levers: prompting is dictation-shaped, and
         // punctuation insertion only adds latency and re-statements
         req.taskHint = .dictation
