@@ -14,6 +14,11 @@ export interface Script {
       segmenter freshness VISIBLE in the data (script.updated moves
       when the algorithm does; B.3.3 finding 0). */
   segVersion?: number;
+  /** Layout hash last stamped: the char budget the CURRENT font size
+      implies (dynamic segmentation) — a size change re-stamps, so
+      layout freshness is visible in the data like segmenter
+      freshness. */
+  layoutHash?: string;
 }
 
 export interface Settings {
@@ -133,12 +138,16 @@ export async function seedRigScripts(seeds: Script[]): Promise<void> {
  * a re-segmentation "shipped" invisibly is indistinguishable from one
  * that never shipped).
  */
-export async function ensureSegmenterVersion(version: number): Promise<void> {
+export async function ensureSegmenterVersion(
+  version: number,
+  layoutHash?: string,
+): Promise<void> {
   const scripts = await loadScripts();
   let touched = false;
   for (const s of scripts) {
-    if (s.segVersion !== version) {
+    if (s.segVersion !== version || (layoutHash !== undefined && s.layoutHash !== layoutHash)) {
       s.segVersion = version;
+      if (layoutHash !== undefined) s.layoutHash = layoutHash;
       s.updated = Date.now();
       touched = true;
     }

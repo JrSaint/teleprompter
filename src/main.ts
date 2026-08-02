@@ -4,7 +4,8 @@ import {
   ensureSegmenterVersion, type Script, type Settings,
 } from './store/db';
 import { RIG_SCRIPTS } from './store/seeds';
-import { SEGMENTER_VERSION } from './core/segmenter';
+import { SEGMENTER_VERSION, budgetForFont } from './core/segmenter';
+import { AVG_CHAR_W_100, availWidthPx, fontPxForDistance } from './ui/typography';
 import { createSetupView } from './ui/SetupView';
 import { createPrompterView } from './ui/PrompterView';
 import { createCalibrationView } from './ui/CalibrationView';
@@ -63,8 +64,17 @@ function showCalibration(settings: Settings, lang: Lang): void {
 async function boot(): Promise<void> {
   await migrateFromLocalStorage();
   await seedRigScripts(RIG_SCRIPTS);
-  await ensureSegmenterVersion(SEGMENTER_VERSION);
   const settings = await loadSettings();
+  // segmentation is font-dependent now — the stamp carries the layout
+  // hash so a size change is visible in the data like a segmenter bump
+  const bootBudget = budgetForFont(
+    fontPxForDistance(settings.distanceFt, settings.sizeMult),
+    availWidthPx(), AVG_CHAR_W_100,
+  );
+  await ensureSegmenterVersion(
+    SEGMENTER_VERSION,
+    `v${SEGMENTER_VERSION}:c${bootBudget.hardChars}`,
+  );
   if (settings.engine === 'native') {
     // pre-warm the engine at launch (readiness gate): most recently
     // touched script's language is tonight's language

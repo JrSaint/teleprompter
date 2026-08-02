@@ -3,9 +3,9 @@ import {
   loadScripts, saveScripts, saveSettings,
 } from '../store/db';
 import type { Lang } from '../core/text';
-import { segmentScript } from '../core/segmenter';
+import { budgetForFont, segmentScript } from '../core/segmenter';
 import { stripMarkup } from '../core/markup';
-import { fontPxForDistance } from './typography';
+import { AVG_CHAR_W_100, availWidthPx, fontPxForDistance } from './typography';
 
 export interface SetupViewHandle {
   el: HTMLElement;
@@ -37,6 +37,11 @@ export function createSetupView(
   el.id = 'setup-view';
   let editing: Script | null = null;
 
+  const settingsBudget = () =>
+    budgetForFont(
+      fontPxForDistance(settings.distanceFt, settings.sizeMult),
+      availWidthPx(), AVG_CHAR_W_100,
+    );
   const persistScripts = async () => {
     await saveScripts(scripts);
   };
@@ -76,7 +81,7 @@ export function createSetupView(
       list.innerHTML = `<div class="su-empty">No scripts yet. Tap <b>＋ New Script</b> — use “/” in the text to force a phrase break.</div>`;
     }
     for (const s of [...scripts].sort((a, b) => b.updated - a.updated)) {
-      const phrases = segmentScript(s.body, s.lang);
+      const phrases = segmentScript(s.body, s.lang, settingsBudget());
       const words = stripMarkup(s.body).trim().split(/\s+/).filter(Boolean).length;
       const card = document.createElement('div');
       card.className = 'su-card su-script';
@@ -153,10 +158,11 @@ export function createSetupView(
     const fontPx = fontPxForDistance(settings.distanceFt, settings.sizeMult);
     card.innerHTML = `
       <h3>Display</h3>
-      <label class="su-row"><span>Standing distance <b>${settings.distanceFt} ft</b></span>
+      <label class="su-row"><span>Standing distance <b id="lbl-dist">${settings.distanceFt} ft</b></span>
         <input type="range" id="set-dist" min="3" max="10" step="0.5" value="${settings.distanceFt}"></label>
-      <label class="su-row"><span>Text size <b>×${settings.sizeMult.toFixed(1)} → ${fontPx}px</b></span>
-        <input type="range" id="set-mult" min="1" max="2" step="0.1" value="${settings.sizeMult}"></label>
+      <label class="su-row"><span>Text size <b id="lbl-mult">×${settings.sizeMult.toFixed(2)} → ${fontPx}px</b></span>
+        <input type="range" id="set-mult" min="1" max="3" step="0.05" value="${settings.sizeMult}"></label>
+      <div id="set-preview-line" style="font-size:${fontPx}px">Read this line</div>
       <label class="su-row su-toggle"><span>Mirror horizontally (rig glass)</span>
         <input type="checkbox" id="set-mh" ${settings.mirrorH ? 'checked' : ''}></label>
       <label class="su-row su-toggle"><span>Mirror vertically</span>
@@ -193,7 +199,7 @@ export function createSetupView(
       }</div>
       <label class="su-row su-toggle"><span>Reduce motion (column steps snap)</span>
         <input type="checkbox" id="set-reduce" ${settings.reduceMotion ? 'checked' : ''}></label>
-      <label class="su-row"><span>Preview brightness <b>${Math.round(settings.previewOpacity * 100)}%</b></span>
+      <label class="su-row"><span>Preview brightness <b id="lbl-preview">${Math.round(settings.previewOpacity * 100)}%</b></span>
         <input type="range" id="set-preview" min="30" max="80" step="5" value="${Math.round(settings.previewOpacity * 100)}"></label>
       <label class="su-row"><span>Speech engine</span>
         <select id="set-engine">
@@ -205,15 +211,28 @@ export function createSetupView(
           ? 'Native recognition runs entirely on this iPad — audio never leaves the device. Requires the installed app. First use of a language downloads its speech model (needs internet once).'
           : 'Web recognition may route audio through Apple’s servers.'
       }</div>`;
+    // Sliders update their labels + the live preview IN PLACE. The
+    // old handlers re-rendered the whole card per input event —
+    // destroying the range input mid-drag, which is why "moving them
+    // changed nothing" on the iPad: the gesture died on its first
+    // tick. Wiring and persistence were always sound.
+    const refreshSizePreview = () => {
+      const px = fontPxForDistance(settings.distanceFt, settings.sizeMult);
+      (card.querySelector('#lbl-dist') as HTMLElement).textContent =
+        `${settings.distanceFt} ft`;
+      (card.querySelector('#lbl-mult') as HTMLElement).textContent =
+        `×${settings.sizeMult.toFixed(2)} → ${px}px`;
+      (card.querySelector('#set-preview-line') as HTMLElement).style.fontSize = `${px}px`;
+    };
     (card.querySelector('#set-dist') as HTMLInputElement).oninput = (e) => {
       settings.distanceFt = parseFloat((e.target as HTMLInputElement).value);
+      refreshSizePreview();
       void persistSettings();
-      renderSettingsCard();
     };
     (card.querySelector('#set-mult') as HTMLInputElement).oninput = (e) => {
       settings.sizeMult = parseFloat((e.target as HTMLInputElement).value);
+      refreshSizePreview();
       void persistSettings();
-      renderSettingsCard();
     };
     (card.querySelector('#set-mh') as HTMLInputElement).onchange = (e) => {
       settings.mirrorH = (e.target as HTMLInputElement).checked;
@@ -242,14 +261,16 @@ export function createSetupView(
       void persistSettings();
     };
     (card.querySelector('#set-display') as HTMLSelectElement).onchange = (e) => {
-      settings.displayMode = (e.target as HTMLSelectElement).value as 'karaoke' | 'ladder';
+      settings.displayMode =
+        (e.target as HTMLSelectElement).value as 'karaoke' | 'ladder' | 'column';
       void persistSettings();
       renderSettingsCard();
     };
     (card.querySelector('#set-preview') as HTMLInputElement).oninput = (e) => {
       settings.previewOpacity = parseInt((e.target as HTMLInputElement).value, 10) / 100;
+      (card.querySelector('#lbl-preview') as HTMLElement).textContent =
+        `${Math.round(settings.previewOpacity * 100)}%`;
       void persistSettings();
-      renderSettingsCard();
     };
     (card.querySelector('#set-engine') as HTMLSelectElement).onchange = (e) => {
       settings.engine = (e.target as HTMLSelectElement).value as 'web' | 'native';
@@ -328,7 +349,7 @@ export function createSetupView(
       s.body = body.value;
       s.aliases = aliases.value;
       s.updated = Date.now();
-      const phrases = segmentScript(s.body, s.lang);
+      const phrases = segmentScript(s.body, s.lang, settingsBudget());
       count.textContent = `${phrases.length} phrases`;
       void persistScripts();
     };

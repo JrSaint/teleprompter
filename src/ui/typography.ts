@@ -11,3 +11,17 @@ export function fontPxForDistance(distanceFt: number, mult: number): number {
   const capPx = (capCm / 2.54) * 96;
   return Math.round(capPx / 0.72);
 }
+
+/** Average glyph width of the display font at 100px, measured once —
+    the segmentation budget converts a font size into a char ceiling
+    with it. Fallback matches -apple-system's measured average. */
+export const AVG_CHAR_W_100 = (() => {
+  const ctx = document.createElement('canvas')?.getContext?.('2d');
+  if (!ctx) return 52;
+  ctx.font = '700 100px -apple-system, system-ui, sans-serif';
+  const ref = 'the quick brown fox jumps over a lazy dog, e as palavras vao seguir voce.';
+  return ctx.measureText(ref).width / ref.length;
+})();
+
+/** Usable prompter line width (the block/column pads 6vw per side). */
+export const availWidthPx = (): number => window.innerWidth * 0.88;

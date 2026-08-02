@@ -1,5 +1,6 @@
 import { saveSettings, type Script, type Settings } from '../store/db';
-import { segmentScript, SEGMENTER_VERSION } from '../core/segmenter';
+import { AVG_CHAR_W_100, availWidthPx } from './typography';
+import { budgetForFont, segmentScript, SEGMENTER_VERSION } from '../core/segmenter';
 import type { SessionHeader } from '../core/recorder';
 import { PrompterController } from './controller';
 import { WebSpeechSource } from '../core/speech/WebSpeechSource';
@@ -43,8 +44,6 @@ const COLUMN_TIERS: Record<number, number> = {
 };
 const COLUMN_FLOOR = 0.12;
 const columnTier = (dist: number): number => COLUMN_TIERS[dist] ?? COLUMN_FLOOR;
-/** Visible window, in lines — edges masked to black beyond it. */
-const COLUMN_WINDOW = 7;
 /** Reading anchor as a fraction of viewport height: rig glass =
     center / lens axis; direct reading sits slightly above center. */
 const ANCHOR_RIG = 0.5;
@@ -63,7 +62,15 @@ export function createPrompterView(
   settings: Settings,
   onExit: () => void,
 ): PrompterViewHandle {
-  const phrases = segmentScript(script.body, script.lang);
+  // Dynamic segmentation (UI-integrity item 4): the char ceiling
+  // follows the chosen font size — bigger text means shorter phrases,
+  // instead of the font silently shrinking to fit fixed phrases (the
+  // conviction behind "the size slider changes nothing").
+  const openFontPx = fontPxForDistance(settings.distanceFt, settings.sizeMult);
+  const phrases = segmentScript(
+    script.body, script.lang,
+    budgetForFont(openFontPx, availWidthPx(), AVG_CHAR_W_100),
+  );
   const el = document.createElement('div');
   el.id = 'prompter-view';
   el.innerHTML = `
@@ -130,14 +137,19 @@ export function createPrompterView(
   // fits on one line (never wrap mid-phrase).
   flip.classList.toggle('mirror-h', settings.mirrorH);
   flip.classList.toggle('mirror-v', settings.mirrorV);
-  const baseFontPx = fontPxForDistance(settings.distanceFt, settings.sizeMult);
+  const baseFontPx = () => fontPxForDistance(settings.distanceFt, settings.sizeMult);
   const fitFontPx = (): number => {
     const ctx = document.createElement('canvas').getContext('2d');
-    if (!ctx) return baseFontPx;
+    if (!ctx) return baseFontPx();
     ctx.font = '700 100px -apple-system, system-ui, sans-serif';
     const widest = Math.max(1, ...phrases.map((p) => ctx.measureText(p.text).width));
-    const avail = window.innerWidth * 0.88; // block padding is 6vw/side
-    return Math.min(baseFontPx, Math.floor((avail / widest) * 100));
+    const avail = availWidthPx();
+    // slot displays NEVER wrap — the cap is the hard guard even when
+    // segmentation already targeted this font; the column soft-wraps
+    // an over-long line instead (same tier), so it keeps the true px
+    return isColumn
+      ? baseFontPx()
+      : Math.min(baseFontPx(), Math.floor((avail / widest) * 100));
   };
   const applySize = () => {
     const px = fitFontPx() + 'px';
@@ -188,21 +200,25 @@ export function createPrompterView(
     }
   }
 
-  /** measure + re-anchor + re-mask (resize / font change); instant */
+  /** measure + re-anchor (resize / font change); instant. The edge
+      fade is a static POSITIONAL mask (full-bleed spec): the column
+      fills the screen and fades to pure black at both edges —
+      visible line count derives from font size, not a window. */
   const colLayout = () => {
     if (!isColumn || colLines.length === 0) return;
     colLineH = colLines[0].offsetHeight || 1;
     colAnchorY = Math.round(window.innerHeight * colAnchorFrac);
-    const half = (COLUMN_WINDOW / 2) * colLineH;
-    const mask = `linear-gradient(to bottom, transparent ${colAnchorY - half - colLineH}px, black ${colAnchorY - half}px, black ${colAnchorY + half}px, transparent ${colAnchorY + half + colLineH}px)`;
-    colViewport.style.maskImage = mask;
-    colViewport.style.webkitMaskImage = mask;
     colPosition(false);
   };
 
-  /** translate so the active line's CENTER sits exactly at the anchor */
-  const colTranslateFor = (active: number): number =>
-    Math.round(colAnchorY - colLineH / 2 - active * colLineH);
+  /** translate so the active line's CENTER sits exactly at the
+      anchor — measured per line (a soft-wrapped over-long line is
+      taller; uniform-height math would drift every line after it) */
+  const colTranslateFor = (active: number): number => {
+    const line = colLines[active];
+    if (!line) return Math.round(colAnchorY - colLineH / 2 - active * colLineH);
+    return Math.round(colAnchorY - line.offsetTop - line.offsetHeight / 2);
+  };
 
   let colShownIndex = 0;
   let colStepTimer: ReturnType<typeof setTimeout> | null = null;
@@ -633,6 +649,45 @@ export function createPrompterView(
   $('vp-restart').onclick = () => controller.restart();
   $('vp-diag-btn').onclick = toggleDiag;
   armBtn.onclick = toggleArm;
+
+  /* ---- pinch-to-resize (idle/armed only; disabled while a read is
+     live). Two fingers map straight onto the size multiplier — the
+     direct-manipulation path for "make it the size my eyes want".
+     Persisted on release; on tape as a pinch-set event. Note: the
+     phrase list stays as segmented at open — the new size fully
+     applies (with re-segmentation) at the next prompter open. ---- */
+  let pinchStartDist = 0;
+  let pinchStartMult = 1;
+  let pinching = false;
+  const touchDist = (t: TouchList) =>
+    Math.hypot(t[0].clientX - t[1].clientX, t[0].clientY - t[1].clientY);
+  flip.addEventListener('touchstart', (e) => {
+    if (e.touches.length !== 2) return;
+    const st = controller.flow.state;
+    if (st !== 'idle' && st !== 'armed') return;
+    pinching = true;
+    pinchStartDist = touchDist(e.touches);
+    pinchStartMult = settings.sizeMult;
+    e.preventDefault();
+  }, { passive: false });
+  flip.addEventListener('touchmove', (e) => {
+    if (!pinching || e.touches.length !== 2) return;
+    e.preventDefault();
+    const scale = touchDist(e.touches) / Math.max(1, pinchStartDist);
+    settings.sizeMult = Math.min(3, Math.max(1, Math.round(pinchStartMult * scale * 20) / 20));
+    applySize();
+  }, { passive: false });
+  const endPinch = () => {
+    if (!pinching) return;
+    pinching = false;
+    void saveSettings(settings);
+    controller.recorder.mic(
+      'pinch-set',
+      JSON.stringify({ sizeMult: settings.sizeMult, fontPx: fitFontPx() }),
+    );
+  };
+  flip.addEventListener('touchend', endPinch);
+  flip.addEventListener('touchcancel', endPinch);
 
   holdWakeLock();
   controller.begin();

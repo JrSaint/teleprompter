@@ -1,5 +1,21 @@
 /* ============ Base ============ */
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+/* Kill the webview tells (UI-integrity item 1): nothing in the app is
+   selectable or long-press-callable — EXCEPT the legitimate editors,
+   re-enabled below. touch-action: manipulation removes double-tap
+   zoom and its tap delay app-wide. */
+* {
+  -webkit-user-select: none; user-select: none;
+  -webkit-touch-callout: none;
+}
+html { touch-action: manipulation; }
+input, textarea {
+  -webkit-user-select: text; user-select: text;
+  font-size: 16px; /* sub-16px inputs invite the iOS focus zoom */
+}
+input[type="range"], input[type="checkbox"] {
+  -webkit-user-select: none; user-select: none;
+}
 html, body {
   margin: 0; padding: 0; height: 100%;
   background: #000; color: #f2f2f7;
@@ -55,7 +71,25 @@ button { font: inherit; color: inherit; background: none; border: none; cursor: 
   gap: 12px; padding: 8px 0; font-size: 15px;
 }
 .su-row b { color: #8e8e93; font-weight: 500; }
-.su-row input[type="range"] { flex: 1; max-width: 150px; accent-color: #0a84ff; }
+.su-row input[type="range"] {
+  flex: 1; accent-color: #0a84ff;
+  height: 44px; touch-action: none; /* the drag owns the gesture */
+}
+.su-row input[type="range"]::-webkit-slider-runnable-track {
+  height: 6px; border-radius: 3px; background: #3a3a3c;
+}
+.su-row input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none; width: 28px; height: 28px;
+  border-radius: 50%; background: #0a84ff; margin-top: -11px;
+}
+/* live preview: the sample line renders at the EXACT computed px,
+   clipped — you see the true glyph size, not a scaled imitation */
+#set-preview-line {
+  height: 96px; overflow: hidden; display: flex; align-items: center;
+  justify-content: center; white-space: nowrap; color: #fff;
+  font-weight: 700; border: 1px solid #1c1c1e; border-radius: 10px;
+  margin: 8px 0;
+}
 .su-toggle input { width: 22px; height: 22px; accent-color: #0a84ff; }
 
 /* editor */
@@ -127,14 +161,25 @@ button { font: inherit; color: inherit; background: none; border: none; cursor: 
    amendment: text is never in motion while being read; between
    phrases the column may take one discrete animated step to the
    fixed anchor). Edges fade to black via a JS-computed mask. */
-#vp-colvp { position: absolute; inset: 0; overflow: hidden; }
+#vp-colvp {
+  position: absolute; inset: 0; overflow: hidden;
+  /* full-bleed: the column fills the screen; luminance fades to pure
+     black at both edges — positional, independent of line count */
+  -webkit-mask-image: linear-gradient(to bottom,
+    transparent 0, black 14%, black 86%, transparent 100%);
+  mask-image: linear-gradient(to bottom,
+    transparent 0, black 14%, black 86%, transparent 100%);
+}
 #vp-col {
   position: absolute; left: 0; right: 0; top: 0;
   text-align: center; padding: 0 6vw;
   line-height: 1.25; will-change: transform;
 }
 .vp-colline {
-  font-weight: 600; color: #fff; white-space: nowrap;
+  font-weight: 600; color: #fff;
+  /* soft-wrap is the column's LAST RESORT for an over-long line at a
+     huge font — same tier, taller line; slot displays never wrap */
+  white-space: normal; overflow-wrap: break-word;
   min-height: 1.25em;
 }
 

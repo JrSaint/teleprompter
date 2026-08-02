@@ -31,6 +31,25 @@ const TARGET_WORDS = 6;
 const TARGET_CHARS = 40;
 const HARD_CHARS = 48;
 
+/** Layout budget: the char ceiling is font-dependent (UI-integrity
+    item 4 — the phrase-fits-one-line ceiling follows the reader's
+    chosen size instead of the font shrinking to fit fixed phrases).
+    Defaults reproduce the classic v2 cut exactly. */
+export interface SegmentBudget {
+  hardChars: number;
+  targetChars: number;
+}
+const DEFAULT_BUDGET: SegmentBudget = { hardChars: HARD_CHARS, targetChars: TARGET_CHARS };
+
+/** Char budget for a font size on a given available width: measured
+    average glyph width of the app's display font, clamped so tiny
+    budgets never fragment scripts into crumbs. */
+export function budgetForFont(fontPx: number, availPx: number, avgCharW100: number): SegmentBudget {
+  const charW = (avgCharW100 / 100) * fontPx;
+  const hard = Math.max(16, Math.min(HARD_CHARS, Math.floor(availPx / Math.max(1, charW))));
+  return { hardChars: hard, targetChars: Math.max(12, Math.min(TARGET_CHARS, Math.round(hard * 0.83))) };
+}
+
 /* Break strength between adjacent words:
    5 = manual "/" marker            (inviolable)
    4 = paragraph break              (inviolable)
@@ -128,7 +147,7 @@ function tokenize(body: string, lang: Lang): RawWord[] {
 const hasMatchable = (g: RawWord[]) => g.some((w) => normalizeWord(w.text));
 
 /** Cost of emitting words i..j (inclusive) of a group as one phrase. */
-function chunkCost(g: RawWord[], i: number, j: number, lang: Lang): number {
+function chunkCost(g: RawWord[], i: number, j: number, lang: Lang, budget: SegmentBudget): number {
   const len = j - i + 1;
   if (len > MAX_WORDS) return Infinity;
   let c = Math.abs(len - TARGET_WORDS) * 0.25;
@@ -141,8 +160,8 @@ function chunkCost(g: RawWord[], i: number, j: number, lang: Lang): number {
   else if (len === 3) c += ba >= 2 ? 0.4 : 1;
   const chars =
     g.slice(i, j + 1).reduce((s, w) => s + w.text.length, 0) + (len - 1);
-  if (chars > TARGET_CHARS) c += (chars - TARGET_CHARS) * 0.12;
-  if (chars > HARD_CHARS) c += (chars - HARD_CHARS) * 2;
+  if (chars > budget.targetChars) c += (chars - budget.targetChars) * 0.12;
+  if (chars > budget.hardChars) c += (chars - budget.hardChars) * 2;
   if (interior) {
     // prefer real prosodic boundaries…
     c += ba >= 2 ? 0 : ba === 1 ? 0.35 : 1.4;
@@ -155,7 +174,7 @@ function chunkCost(g: RawWord[], i: number, j: number, lang: Lang): number {
 }
 
 /** Minimum-cost segmentation of one group via DP over cut positions. */
-function cutGroup(g: RawWord[], lang: Lang): RawWord[][] {
+function cutGroup(g: RawWord[], lang: Lang, budget: SegmentBudget): RawWord[][] {
   const n = g.length;
   const best = new Array<number>(n + 1).fill(Infinity);
   const cutAt = new Array<number>(n + 1).fill(-1);
@@ -164,7 +183,7 @@ function cutGroup(g: RawWord[], lang: Lang): RawWord[][] {
     // i descending: on exact cost ties the LATER cut wins (front-
     // loaded phrases — "…stayed with you | the whole way through.")
     for (let i = j - 1; i >= Math.max(0, j - MAX_WORDS); i--) {
-      const c = best[i] + chunkCost(g, i, j - 1, lang);
+      const c = best[i] + chunkCost(g, i, j - 1, lang, budget);
       if (c < best[j] - 1e-9) {
         best[j] = c;
         cutAt[j] = i;
@@ -176,7 +195,7 @@ function cutGroup(g: RawWord[], lang: Lang): RawWord[][] {
   return chunks;
 }
 
-function chunk(words: RawWord[], lang: Lang): RawWord[][] {
+function chunk(words: RawWord[], lang: Lang, budget: SegmentBudget): RawWord[][] {
   // Hard boundaries end a group: sentence punctuation, paragraph
   // breaks, manual "/" markers. No phrase ever spans one — with the
   // single deliberate exception below.
@@ -219,7 +238,7 @@ function chunk(words: RawWord[], lang: Lang): RawWord[][] {
     }
   }
 
-  return groups.flatMap((g) => cutGroup(g, lang));
+  return groups.flatMap((g) => cutGroup(g, lang, budget));
 }
 
 function toPhrase(ws: RawWord[]): Phrase {
@@ -255,8 +274,9 @@ function finishPhrase(p: Phrase, lang: Lang): Phrase {
 }
 
 /** Split a script body (may contain {tag:…} markup) into phrases. */
-export function segmentScript(body: string, lang: Lang): Phrase[] {
-  return chunk(tokenize(body, lang), lang).map((ws) => finishPhrase(toPhrase(ws), lang));
+export function segmentScript(body: string, lang: Lang, budget?: SegmentBudget): Phrase[] {
+  return chunk(tokenize(body, lang), lang, budget ?? DEFAULT_BUDGET)
+    .map((ws) => finishPhrase(toPhrase(ws), lang));
 }
 
 /** One recorded phrase text → a Phrase, with NO re-chunking. Replay
