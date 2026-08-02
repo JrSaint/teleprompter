@@ -1,0 +1,14 @@
+[   42828ms] [LOG] [diag 42.8s] state: idle → armed @ http://localhost:5173/src/core/diag.ts:49
+[   42830ms] [LOG] [diag 42.8s] state: armed → following @ http://localhost:5173/src/core/diag.ts:49
+[   44438ms] [LOG] [diag 44.4s] advance (lead, ev 3) → phrase 2 @ http://localhost:5173/src/core/diag.ts:49
+[   46687ms] [LOG] [diag 46.7s] advance (lead, ev 4) → phrase 3 @ http://localhost:5173/src/core/diag.ts:49
+[   47973ms] [LOG] [diag 48.0s] advance (lead, ev 1) → phrase 4 @ http://localhost:5173/src/core/diag.ts:49
+[   49901ms] [LOG] [diag 49.9s] advance (lead, ev 3) → phrase 5 @ http://localhost:5173/src/core/diag.ts:49
+[   51508ms] [LOG] [diag 51.5s] advance (lead, ev 3) → phrase 6 @ http://localhost:5173/src/core/diag.ts:49
+[   54330ms] [LOG] [diag 54.3s] state: following → holding @ http://localhost:5173/src/core/diag.ts:49
+[  104423ms] [LOG] [diag 19.7s] state: idle → armed @ http://localhost:5173/src/core/diag.ts:49
+[  104424ms] [LOG] [diag 19.7s] advance (lead, ev 3) → phrase 2 @ http://localhost:5173/src/core/diag.ts:49
+[  104424ms] [LOG] [diag 19.7s] advance (lead, ev 4) → phrase 3 @ http://localhost:5173/src/core/diag.ts:49
+[  104424ms] [LOG] [diag 19.7s] advance (lead, ev 1) → phrase 4 @ http://localhost:5173/src/core/diag.ts:49
+[  104424ms] [LOG] [diag 19.7s] state: armed → following @ http://localhost:5173/src/core/diag.ts:49
+[  106926ms] [LOG] [diag 22.2s] state: following → holding @ http://localhost:5173/src/core/diag.ts:49

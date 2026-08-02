@@ -7,18 +7,22 @@ shell with a custom Swift NativeSpeech plugin. Tests: `npx vitest run`.
 
 ## Design laws (locked — do not revisit)
 
-- **Light moves, text doesn't — amended, not repealed (second-voice
-  verdict, architect-accepted): text is never in motion while being
-  read; between phrases the column may take one discrete animated
-  step to the fixed anchor.** Slot displays (ladder: 3 — default
-  pending the column A/B; karaoke: 2) animate brightness ONLY, e.g.
-  the swap crossfade (`SWAP_FADE_MS` in `src/ui/PrompterView.ts`).
-  Column mode (Erika's design, `displayMode: 'column'`) pins the
-  active line at a fixed reading anchor and takes ONE ~200ms
-  ease-out step per voice-driven advance (`COLUMN_STEP_MS`,
-  catch-ups = one longer step); holds/ad-libs/idle have zero drift,
-  and constant-velocity scrolling remains banned. Reduce-motion
-  swaps the glide for an instant reposition.
+- **Motion law (third-convergence ruling — founder's original
+  proposal → Erika's design → founder's step verdict): the column
+  may move ONLY at the voice's pace.** Slot displays (ladder: 3;
+  karaoke: 2) animate brightness ONLY (`SWAP_FADE_MS`). Column
+  Step: one discrete ~200ms ease-out step per voice-driven advance
+  (`COLUMN_STEP_MS`). Column Glide (default pending A/B):
+  continuous slew-limited voice-governed motion (`GLIDE_*` in
+  `src/ui/PrompterView.ts`) holding the active line inside a
+  ±0.5-line anchor band; silence decelerates to a full stop ≤500ms
+  and the column NEVER moves while the reader is silent; velocity
+  never negative; catch-ups >2 lines are one eased reposition.
+  UNPACED constant-velocity scrolling remains banned. Reduce-motion
+  forces Step with instant repositions. Glide's luminance is a
+  static positional overlay (brightness = f(distance from anchor));
+  the moving column is one composited layer — no repaint, no
+  reflow, no per-line style writes during motion.
 - The display advances only because words were spoken; silence and
   ad-lib hold; never auto-backward. Swap timing is per-language
   (B.3.5 duel verdict: EN = Flow, PT = Lead until its engine is

@@ -18,7 +18,7 @@ type RenderEvent = {
   kind: 'render';
   phase: 'target' | 'settled';
   active: number;
-  slots: Array<{ p: number; tier: number; text?: string; dy?: number }>;
+  slots: Array<{ p: number; tier: number; text?: string; dy?: number; band?: number }>;
   t: number;
 };
 
@@ -38,13 +38,13 @@ describe('render truth', () => {
         expect(slot!.tier, `render@${r.t} (${r.phase}): active ${r.active} at tier ${slot!.tier}`)
           .toBeGreaterThanOrEqual(0.99);
         if (r.phase === 'settled' && slot!.dy !== undefined) {
-          // column mode: the active line must SIT at the reading
-          // anchor once settled (±2px) — position is asserted, not
-          // assumed
+          // column truth: Step settles ON the anchor (±2px); Glide
+          // holds the active line inside the anchor band while
+          // following (band = half-width px, from the tape)
           expect(
             Math.abs(slot!.dy),
             `render@${r.t}: active ${r.active} settled ${slot!.dy}px off anchor`,
-          ).toBeLessThanOrEqual(2);
+          ).toBeLessThanOrEqual(slot!.band ?? 2);
         }
         if (r.phase === 'settled' && slot!.text) {
           const want = stripMarkup(log.phrases![r.active] ?? '').trim();

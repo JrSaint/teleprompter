@@ -43,6 +43,9 @@ export interface ControllerEvents {
 export class PrompterController {
   readonly flow = new Flow();
   readonly recorder = new FlightRecorder();
+  /** performance.now() of the last MATCHED token — Glide's voice
+      governor: the column only moves while this is fresh. */
+  lastMatchedAt = 0;
   /** True after a self-heal until the next natural advance ("~"). */
   healed = false;
 
@@ -289,6 +292,7 @@ export class PrompterController {
       });
     }
 
+    if (res.matchedAny) this.lastMatchedAt = performance.now();
     if (res.matchedAny) {
       if (this.flow.state === 'armed' || this.flow.state === 'holding') {
         this.flow.to('following');
@@ -456,6 +460,12 @@ export class PrompterController {
   }
 
   /* --- Flow mode: predictive swap ---------------------------------- */
+
+  /** Rolling ms-per-content-word (the Flow pace model, noted in every
+      swap-timing mode) — Glide's base velocity source. */
+  paceMsPerWord(): number | null {
+    return this.flowModel.medianRate();
+  }
 
   /** One reason line per phrase+cause: why prediction is currently
       impossible — stall audits classify rail suppression from the

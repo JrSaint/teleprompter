@@ -45,7 +45,13 @@ export interface Settings {
       pinned at a fixed reading anchor, ONE discrete step per
       voice-driven advance). */
   displayMode: 'karaoke' | 'ladder' | 'column';
-  /** Column steps reposition instantly (no glide), crossfade only. */
+  /** Column motion: 'glide' = continuous slew-limited voice-governed
+      motion holding the active line in the anchor band (the founder's
+      third-convergence ruling); 'step' = one discrete step per
+      advance. Default glide; the founder+Erika A/B picks the final
+      default. reduceMotion forces step with instant repositions. */
+  columnMotion?: 'glide' | 'step';
+  /** Column repositions instantly (no animation), crossfade only. */
   reduceMotion?: boolean;
   /** pt-BR ship-gate fallback (no UI — dev flag): server-assisted
       recognition for PT only. EN stays fully on-device, always. */

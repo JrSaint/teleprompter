@@ -197,7 +197,16 @@ export function createSetupView(
           ? 'Ladder: three fixed lines read strictly downward, then the reading position sweeps back to the top — like lines of a book.'
           : 'Karaoke: two fixed lines; the line being read brightens in place and the other previews what comes next.'
       }</div>
-      <label class="su-row su-toggle"><span>Reduce motion (column steps snap)</span>
+      <label class="su-row"><span>Column motion</span>
+        <select id="set-colmotion">
+          <option value="glide" ${(settings.columnMotion ?? 'glide') === 'glide' ? 'selected' : ''}>Glide (voice-paced)</option>
+          <option value="step" ${settings.columnMotion === 'step' ? 'selected' : ''}>Step (per phrase)</option>
+        </select></label>
+      <div class="su-engine-hint">Glide flows continuously at your
+        reading pace and freezes the instant you stop speaking; Step
+        takes one discrete step per phrase. Reduce motion forces Step
+        with instant snaps.</div>
+      <label class="su-row su-toggle"><span>Reduce motion (column snaps, no animation)</span>
         <input type="checkbox" id="set-reduce" ${settings.reduceMotion ? 'checked' : ''}></label>
       <label class="su-row"><span>Preview brightness <b id="lbl-preview">${Math.round(settings.previewOpacity * 100)}%</b></span>
         <input type="range" id="set-preview" min="30" max="80" step="5" value="${Math.round(settings.previewOpacity * 100)}"></label>
@@ -244,6 +253,10 @@ export function createSetupView(
     };
     (card.querySelector('#set-diag') as HTMLInputElement).onchange = (e) => {
       settings.diagOverlay = (e.target as HTMLInputElement).checked;
+      void persistSettings();
+    };
+    (card.querySelector('#set-colmotion') as HTMLSelectElement).onchange = (e) => {
+      settings.columnMotion = (e.target as HTMLSelectElement).value as 'glide' | 'step';
       void persistSettings();
     };
     (card.querySelector('#set-reduce') as HTMLInputElement).onchange = (e) => {

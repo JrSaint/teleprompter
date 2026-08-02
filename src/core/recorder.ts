@@ -48,7 +48,20 @@ export type SessionEvent =
       /** dy: settled px offset of the ACTIVE line from the fixed
           reading anchor (column mode) — the position half of render
           truth. Absent for slot displays. */
-      slots: Array<{ p: number; tier: number; text?: string; dy?: number }>;
+      /** band: glide's anchor half-width in px — |dy| ≤ band is the
+          truth condition while following (step asserts ±2px). */
+      slots: Array<{ p: number; tier: number; text?: string; dy?: number; band?: number }>;
+    }
+  | {
+      t: number; kind: 'glide';
+      /** column Glide telemetry: motion start/stop, ~1Hz velocity
+          samples while moving, and jank (>2 consecutive dropped
+          frames). v in px/s; dy = active line's px offset from the
+          anchor at sample time; frameMs on jank events. */
+      phase: 'start' | 'stop' | 'v' | 'jank' | 'reposition';
+      v: number;
+      dy?: number;
+      frameMs?: number;
     }
   | {
       t: number; kind: 'motion';
@@ -93,6 +106,9 @@ type SessionEventBody = Body<SessionEvent>;
     (B.3.3 finding 1: neither B.3 log said which display was on). */
 export interface SessionHeader {
   displayMode: 'karaoke' | 'ladder' | 'column';
+  /** column only: which motion mode ran (the Glide/Step A/B needs
+      the tape to say) */
+  columnMotion?: 'glide' | 'step';
   crossfadeMs: number;
   /** slot brightness levels: active / next / (ladder) next-next */
   brightness: { active: number; next: number; nextNext?: number };
@@ -202,7 +218,7 @@ export class FlightRecorder {
   render(
     phase: 'target' | 'settled',
     active: number,
-    slots: Array<{ p: number; tier: number; text?: string; dy?: number }>,
+    slots: Array<{ p: number; tier: number; text?: string; dy?: number; band?: number }>,
   ): void {
     this.push({ kind: 'render', phase, active, slots });
   }
@@ -213,6 +229,13 @@ export class FlightRecorder {
     distancePx: number, durationMs: number,
   ): void {
     this.push({ kind: 'motion', phase, from, to, distancePx, durationMs });
+  }
+
+  glide(
+    phase: 'start' | 'stop' | 'v' | 'jank' | 'reposition',
+    fields: { v: number; dy?: number; frameMs?: number },
+  ): void {
+    this.push({ kind: 'glide', phase, ...fields });
   }
 
   mic(status: string, detail?: string): void {

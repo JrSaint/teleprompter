@@ -49,6 +49,31 @@ const columnTier = (dist: number): number => COLUMN_TIERS[dist] ?? COLUMN_FLOOR;
 const ANCHOR_RIG = 0.5;
 const ANCHOR_DIRECT = 0.42;
 
+/* ---- Glide (third-convergence ruling: founder's original proposal →
+   Erika's design → founder's step verdict "jerking"): the column
+   moves CONTINUOUSLY at the voice's pace. A slew-rate-limited
+   velocity loop holds the active line inside an anchor band; voice
+   is the governor — silence decelerates to a full stop and the
+   column NEVER moves while the reader is silent. --------------- */
+/** acceleration cap, px/s² — speed changes stay imperceptible */
+const GLIDE_ACCEL = 90;
+/** silence → full stop within this */
+const GLIDE_STOP_MS = 450;
+/** a matched token this recent means "speaking" — just above the
+    p90 inter-token gap (589ms on the healthy tapes), so mid-phrase
+    stutter never brakes the column but real silence reads fast */
+const GLIDE_SPEAK_WINDOW_MS = 950;
+/** anchor band half-width, in line-heights (the truth condition) */
+const GLIDE_BAND_LH = 0.5;
+/** velocity clamp, × base pace */
+const GLIDE_MAX_X = 1.5;
+/** error beyond this many lines: one eased reposition, never a
+    sustained sprint */
+const GLIDE_REPOSITION_LINES = 2;
+const GLIDE_REPOSITION_MS = 400;
+/** fallback ms-per-content-word while the pace model is cold */
+const GLIDE_COLD_RATE_MS = 450;
+
 /**
  * The rig display. Fixed slots, stationary text, brightness-only
  * emphasis — the line being read brightens IN PLACE. Karaoke: two
@@ -80,7 +105,7 @@ export function createPrompterView(
         <div class="vp-slot" id="vp-slot1"></div>
         <div class="vp-slot" id="vp-slot2"></div>
       </div>
-      <div id="vp-colvp" hidden><div id="vp-col"></div></div>
+      <div id="vp-colvp" hidden><div id="vp-col"></div><div id="vp-lum"></div></div>
       <div id="vp-done" hidden>— end of script —</div>
     </div>
     <div id="vp-status"></div>
@@ -114,6 +139,10 @@ export function createPrompterView(
   // in both modes (index 0 → slot 0).
   const displayMode = settings.displayMode ?? 'karaoke';
   const isColumn = displayMode === 'column';
+  /** reduce-motion forces Step (with instant repositions) */
+  const columnMotion: 'glide' | 'step' =
+    settings.reduceMotion === true ? 'step' : settings.columnMotion ?? 'glide';
+  const isGlide = isColumn && columnMotion === 'glide';
   const SLOTS = displayMode === 'ladder' ? 3 : 2;
   const NEXT_NEXT_DIM = Math.max(0.15, settings.previewOpacity - 0.25);
   const slotEls = [$('vp-slot0'), $('vp-slot1'), $('vp-slot2')];
@@ -200,15 +229,53 @@ export function createPrompterView(
     }
   }
 
-  /** measure + re-anchor (resize / font change); instant. The edge
-      fade is a static POSITIONAL mask (full-bleed spec): the column
-      fills the screen and fades to pure black at both edges —
-      visible line count derives from font size, not a window. */
+  /** Continuous positional luminance (Glide) and edge fades (both
+      column modes) live in ONE static overlay that never repaints —
+      the moving column is a lone composited layer beneath it
+      (render-performance workstream). Brightness = f(screen distance
+      from the fixed anchor), so in Glide no per-line style ever
+      changes during motion. */
+  const lumEl = $('vp-lum');
+  const colBrightness = (distLh: number): number =>
+    Math.max(COLUMN_FLOOR, Math.exp(-0.45 * Math.pow(Math.abs(distLh), 1.3)));
+  const buildLum = () => {
+    const H = window.innerHeight;
+    const stops: string[] = ['rgba(0,0,0,1) 0px'];
+    if (isGlide) {
+      for (let y = Math.max(0, colAnchorY - 6 * colLineH); y <= Math.min(H, colAnchorY + 6 * colLineH); y += Math.max(8, colLineH / 4)) {
+        const edge = Math.min(y, H - y) < H * 0.12 ? 0.5 : 0; // extra edge sink
+        const a = Math.min(1, 1 - colBrightness((y - colAnchorY) / colLineH) + edge);
+        stops.push(`rgba(0,0,0,${Math.round(a * 1000) / 1000}) ${Math.round(y)}px`);
+      }
+    } else {
+      // step mode: per-line tiers carry the emphasis; the overlay is
+      // only the full-bleed edge fade
+      stops.push(`rgba(0,0,0,0) ${Math.round(H * 0.14)}px`);
+      stops.push(`rgba(0,0,0,0) ${Math.round(H * 0.86)}px`);
+    }
+    stops.push(`rgba(0,0,0,1) ${window.innerHeight}px`);
+    lumEl.style.background = `linear-gradient(to bottom, ${stops.join(', ')})`;
+  };
+
+  /** measure + re-anchor (resize / font change); instant. */
   const colLayout = () => {
     if (!isColumn || colLines.length === 0) return;
     colLineH = colLines[0].offsetHeight || 1;
     colAnchorY = Math.round(window.innerHeight * colAnchorFrac);
-    colPosition(false);
+    buildLum();
+    if (isGlide) {
+      // lines are statically bright; the overlay does ALL dimming —
+      // zero style writes and zero reflow during motion
+      for (const line of colLines) {
+        line.style.transition = 'none';
+        line.style.opacity = '1';
+        line.style.fontWeight = '600';
+      }
+      glidePos = colTranslateFor(phraseIndex);
+      applyGlidePos();
+    } else {
+      colPosition(false);
+    }
   };
 
   /** translate so the active line's CENTER sits exactly at the
@@ -238,7 +305,7 @@ export function createPrompterView(
     colEl.style.transition = glide
       ? `transform ${dur}ms cubic-bezier(0, 0, 0.2, 1)`
       : 'none';
-    colEl.style.transform = `translateY(${y}px)`;
+    colEl.style.transform = `translate3d(0, ${y}px, 0)`;
     for (let i = 0; i < colLines.length; i++) {
       const line = colLines[i];
       const tier = columnTier(i - to);
@@ -257,6 +324,90 @@ export function createPrompterView(
     }
     colShownIndex = to;
   };
+
+
+  /* ---- glide velocity loop ---------------------------------------- */
+  let glidePos = 0;
+  let glideV = 0;
+  let glideMoving = false;
+  let glideRaf = 0;
+  let glideLastT = 0;
+  let glideRepositioning = false;
+  let jankStreak = 0;
+  let lastJankLogAt = 0;
+  let lastVSampleAt = 0;
+  let disposed = false;
+
+  const applyGlidePos = () => {
+    colEl.style.transition = 'none';
+    colEl.style.transform = `translate3d(0, ${Math.round(glidePos * 10) / 10}px, 0)`;
+  };
+  const glideError = (): number => glidePos - colTranslateFor(phraseIndex);
+
+  /** far-skip / deep catch-up: ONE eased reposition, never a sprint */
+  const glideReposition = (ms: number) => {
+    glideRepositioning = true;
+    glideV = 0;
+    const target = colTranslateFor(phraseIndex);
+    controller.recorder.glide('reposition', { v: 0, dy: glidePos - target });
+    colEl.style.transition = `transform ${ms}ms cubic-bezier(0, 0, 0.2, 1)`;
+    colEl.style.transform = `translate3d(0, ${target}px, 0)`;
+    glidePos = target;
+    setTimeout(() => { glideRepositioning = false; }, ms + 20);
+  };
+
+  const glideFrame = (now: number) => {
+    if (disposed || !isGlide) return;
+    glideRaf = requestAnimationFrame(glideFrame);
+    if (glideLastT === 0) { glideLastT = now; return; }
+    const frameMs = now - glideLastT;
+    glideLastT = now;
+    // jank telemetry: >2 consecutive dropped frames (≈>34ms at 60Hz)
+    if (frameMs > 34) {
+      jankStreak++;
+      if (jankStreak >= 2 && now - lastJankLogAt > 2000) {
+        lastJankLogAt = now;
+        controller.recorder.glide('jank', { v: Math.round(glideV), frameMs: Math.round(frameMs) });
+      }
+    } else jankStreak = 0;
+    if (glideRepositioning || doneEl.hidden === false) return;
+    const dt = Math.min(0.05, frameMs / 1000);
+    const err = glideError(); // px still to travel (≥0 when behind)
+    if (err > GLIDE_REPOSITION_LINES * colLineH) {
+      glideReposition(GLIDE_REPOSITION_MS);
+      return;
+    }
+    // voice is the governor: fresh matched speech while following
+    const speaking =
+      flowState === 'following' &&
+      performance.now() - controller.lastMatchedAt < GLIDE_SPEAK_WINDOW_MS;
+    const rate = controller.paceMsPerWord() ?? GLIDE_COLD_RATE_MS;
+    const words = Math.max(2, phrases[phraseIndex]?.contentIdx.length ?? 4);
+    const base = colLineH / ((rate * words) / 1000); // px/s at the reader's pace
+    const vTarget = speaking && err > 2
+      ? Math.min(GLIDE_MAX_X * base, base * (0.5 + err / colLineH))
+      : 0; // never negative; silence/hold: stop
+    const decelCap = Math.max(GLIDE_ACCEL, glideV / (GLIDE_STOP_MS / 1000));
+    const dv = Math.max(-decelCap * dt, Math.min(GLIDE_ACCEL * dt, vTarget - glideV));
+    glideV = Math.max(0, glideV + dv);
+    if (glideV < 0.5 && vTarget === 0) glideV = 0;
+    if (glideV > 0) {
+      glidePos = Math.max(colTranslateFor(phraseIndex), glidePos - glideV * dt);
+      applyGlidePos();
+    }
+    if (glideV > 0 && !glideMoving) {
+      glideMoving = true;
+      controller.recorder.glide('start', { v: Math.round(glideV), dy: Math.round(err) });
+    } else if (glideV === 0 && glideMoving) {
+      glideMoving = false;
+      controller.recorder.glide('stop', { v: 0, dy: Math.round(glideError()) });
+    }
+    if (glideMoving && now - lastVSampleAt > 1000) {
+      lastVSampleAt = now;
+      controller.recorder.glide('v', { v: Math.round(glideV), dy: Math.round(glideError()) });
+    }
+  };
+  if (isGlide) glideRaf = requestAnimationFrame(glideFrame);
 
   applySize();
   window.addEventListener('resize', applySize);
@@ -286,14 +437,24 @@ export function createPrompterView(
         'settled', active,
         colWindow(active).map((i) => {
           const line = colLines[i];
-          const entry: { p: number; tier: number; text?: string; dy?: number } = {
+          // glide's dimming lives in the static overlay — a line's own
+          // opacity is 1; report the POSITIONAL brightness at its
+          // current distance so tapes stay comparable across modes
+          const r0 = line.getBoundingClientRect();
+          const tier = isGlide
+            ? Math.round(colBrightness((r0.top + r0.height / 2 - colAnchorY) / colLineH) * 100) / 100
+            : Math.round((parseFloat(getComputedStyle(line).opacity) || 0) * 100) / 100;
+          const entry: { p: number; tier: number; text?: string; dy?: number; band?: number } = {
             p: i,
-            tier: Math.round((parseFloat(getComputedStyle(line).opacity) || 0) * 100) / 100,
+            tier,
             text: (line.textContent ?? '').slice(0, 24),
           };
           if (i === active) {
             const r = line.getBoundingClientRect();
             entry.dy = Math.round((r.top + r.height / 2 - colAnchorY) * 10) / 10;
+            // glide truth: within the anchor band while following;
+            // step truth stays ±2px at rest
+            if (isGlide) entry.band = Math.round(GLIDE_BAND_LH * colLineH);
           }
           return entry;
         }),
@@ -471,6 +632,7 @@ export function createPrompterView(
   // which segmenter cut the phrase list).
   const header: SessionHeader = {
     displayMode,
+    ...(isColumn ? { columnMotion } : {}),
     crossfadeMs: SWAP_FADE_MS,
     brightness: isColumn
       ? { active: 1, next: 0.65, nextNext: 0.4 }
@@ -503,11 +665,24 @@ export function createPrompterView(
           paintStatus();
           return;
         }
-        // ONE discrete step to the fixed anchor per voice-driven
-        // advance (the controller already collapsed gulps to a single
-        // final target — a catch-up is one longer step, never a
-        // cascade); everything else repositions instantly. Holds and
-        // ad-libs never reach here: zero drift.
+        if (isGlide) {
+          // the velocity loop owns motion; advances only move the
+          // TARGET. Backward (manual prev) is a discrete user step;
+          // deep catch-ups get one eased reposition from the loop.
+          if (!swapped) {
+            glidePos = colTranslateFor(phraseIndex);
+            applyGlidePos();
+          } else if (i < prev) {
+            glideReposition(COLUMN_STEP_MS);
+          }
+          paintStatus();
+          colLogRender();
+          return;
+        }
+        // Step mode: ONE discrete step to the fixed anchor per
+        // voice-driven advance (gulps arrive collapsed — one longer
+        // step, never a cascade); everything else repositions
+        // instantly. Holds and ad-libs never reach here: zero drift.
         colPosition(swapped);
         paintStatus();
         colLogRender();
@@ -697,6 +872,8 @@ export function createPrompterView(
     el,
     controller,
     dispose() {
+      disposed = true;
+      if (glideRaf) cancelAnimationFrame(glideRaf);
       window.removeEventListener('keydown', onKey);
       window.removeEventListener('resize', applySize);
       if (refillTimer) clearTimeout(refillTimer);
