@@ -7,13 +7,18 @@ shell with a custom Swift NativeSpeech plugin. Tests: `npx vitest run`.
 
 ## Design laws (locked — do not revisit)
 
-- **Light moves, text doesn't.** No feature may animate text position
-  on the prompter screen. Text sits in fixed slots (ladder: 3 —
-  the default per the B.3.4 A/B verdict; karaoke: 2, settings
-  option) and the line being read brightens IN PLACE; the only
-  permitted transition is brightness (opacity), e.g. the swap
-  crossfade (`SWAP_FADE_MS` in `src/ui/PrompterView.ts`). Never
-  scroll, slide, or zoom prompter text.
+- **Light moves, text doesn't — amended, not repealed (second-voice
+  verdict, architect-accepted): text is never in motion while being
+  read; between phrases the column may take one discrete animated
+  step to the fixed anchor.** Slot displays (ladder: 3 — default
+  pending the column A/B; karaoke: 2) animate brightness ONLY, e.g.
+  the swap crossfade (`SWAP_FADE_MS` in `src/ui/PrompterView.ts`).
+  Column mode (Erika's design, `displayMode: 'column'`) pins the
+  active line at a fixed reading anchor and takes ONE ~200ms
+  ease-out step per voice-driven advance (`COLUMN_STEP_MS`,
+  catch-ups = one longer step); holds/ad-libs/idle have zero drift,
+  and constant-velocity scrolling remains banned. Reduce-motion
+  swaps the glide for an instant reposition.
 - The display advances only because words were spoken; silence and
   ad-lib hold; never auto-backward. Swap timing is per-language
   (B.3.5 duel verdict: EN = Flow, PT = Lead until its engine is

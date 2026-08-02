@@ -45,7 +45,18 @@ export type SessionEvent =
           display-truth bugs are invisible without them (B.3.6). */
       phase: 'target' | 'settled';
       active: number;
-      slots: Array<{ p: number; tier: number; text?: string }>;
+      /** dy: settled px offset of the ACTIVE line from the fixed
+          reading anchor (column mode) — the position half of render
+          truth. Absent for slot displays. */
+      slots: Array<{ p: number; tier: number; text?: string; dy?: number }>;
+    }
+  | {
+      t: number; kind: 'motion';
+      /** column mode: the one discrete step per advance — display
+          motion is on tape (step start/end, distance, duration). */
+      phase: 'step-start' | 'step-end';
+      from: number; to: number;
+      distancePx: number; durationMs: number;
     }
   | {
       t: number; kind: 'summary';
@@ -81,7 +92,7 @@ type SessionEventBody = Body<SessionEvent>;
 /** What actually rendered — the tape must prove it, not assume it
     (B.3.3 finding 1: neither B.3 log said which display was on). */
 export interface SessionHeader {
-  displayMode: 'karaoke' | 'ladder';
+  displayMode: 'karaoke' | 'ladder' | 'column';
   crossfadeMs: number;
   /** slot brightness levels: active / next / (ladder) next-next */
   brightness: { active: number; next: number; nextNext?: number };
@@ -191,9 +202,17 @@ export class FlightRecorder {
   render(
     phase: 'target' | 'settled',
     active: number,
-    slots: Array<{ p: number; tier: number; text?: string }>,
+    slots: Array<{ p: number; tier: number; text?: string; dy?: number }>,
   ): void {
     this.push({ kind: 'render', phase, active, slots });
+  }
+
+  motion(
+    phase: 'step-start' | 'step-end',
+    from: number, to: number,
+    distancePx: number, durationMs: number,
+  ): void {
+    this.push({ kind: 'motion', phase, from, to, distancePx, durationMs });
   }
 
   mic(status: string, detail?: string): void {

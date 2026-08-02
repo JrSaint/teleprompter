@@ -25,6 +25,31 @@ const SWAP_FADE_MS = 150;
     (B.3.3 addendum c: the ~150ms-post-swap refill read as a flicker). */
 const REFILL_DELAY_MS = SWAP_FADE_MS + 200;
 
+/* ---- Column mode (Erika's second-voice design, architect-accepted:
+   the voice-stepped column). The active line is pinned at a fixed
+   reading anchor; on each voice-driven advance the whole column takes
+   ONE discrete ease-out step to bring the next phrase to the anchor,
+   then is fully stationary. Holds, ad-libs and idle: zero drift,
+   ever. Constant-velocity scrolling stays banned — text is never in
+   motion while being read. -------------------------------------- */
+/** One step's glide (tunable 150–250). */
+const COLUMN_STEP_MS = 200;
+/** Catch-up/far-skip: one LONGER step, never a cascade. */
+const columnStepMs = (lines: number): number =>
+  Math.min(250, COLUMN_STEP_MS + 25 * Math.max(0, lines - 1));
+/** Gradient by distance from the active line (tunable). */
+const COLUMN_TIERS: Record<number, number> = {
+  [0]: 1, [1]: 0.65, [2]: 0.4, [3]: 0.2, [-1]: 0.45, [-2]: 0.25,
+};
+const COLUMN_FLOOR = 0.12;
+const columnTier = (dist: number): number => COLUMN_TIERS[dist] ?? COLUMN_FLOOR;
+/** Visible window, in lines — edges masked to black beyond it. */
+const COLUMN_WINDOW = 7;
+/** Reading anchor as a fraction of viewport height: rig glass =
+    center / lens axis; direct reading sits slightly above center. */
+const ANCHOR_RIG = 0.5;
+const ANCHOR_DIRECT = 0.42;
+
 /**
  * The rig display. Fixed slots, stationary text, brightness-only
  * emphasis — the line being read brightens IN PLACE. Karaoke: two
@@ -48,6 +73,7 @@ export function createPrompterView(
         <div class="vp-slot" id="vp-slot1"></div>
         <div class="vp-slot" id="vp-slot2"></div>
       </div>
+      <div id="vp-colvp" hidden><div id="vp-col"></div></div>
       <div id="vp-done" hidden>— end of script —</div>
     </div>
     <div id="vp-status"></div>
@@ -80,10 +106,20 @@ export function createPrompterView(
   // top) is the A/B alternative. First phrase starts in the TOP slot
   // in both modes (index 0 → slot 0).
   const displayMode = settings.displayMode ?? 'karaoke';
+  const isColumn = displayMode === 'column';
   const SLOTS = displayMode === 'ladder' ? 3 : 2;
   const NEXT_NEXT_DIM = Math.max(0.15, settings.previewOpacity - 0.25);
   const slotEls = [$('vp-slot0'), $('vp-slot1'), $('vp-slot2')];
   slotEls[2].hidden = SLOTS < 3;
+  const colViewport = $('vp-colvp');
+  const colEl = $('vp-col');
+  colViewport.hidden = !isColumn;
+  if (isColumn) $('vp-block').hidden = true;
+  /** instant reposition, crossfade only (setting OR the OS ask) */
+  const reduceMotion =
+    settings.reduceMotion === true ||
+    (typeof matchMedia === 'function' &&
+      matchMedia('(prefers-reduced-motion: reduce)').matches);
   /** brightness by distance from the active phrase */
   const brightnessFor = (dist: number): number =>
     dist <= 0 ? 1 : dist === 1 ? settings.previewOpacity : NEXT_NEXT_DIM;
@@ -106,9 +142,12 @@ export function createPrompterView(
   const applySize = () => {
     const px = fitFontPx() + 'px';
     for (const s of slotEls) s.style.fontSize = px;
+    if (isColumn) {
+      colEl.style.fontSize = px;
+      colLayout();
+    }
   };
-  applySize();
-  window.addEventListener('resize', applySize);
+  // (invoked after the column machinery below is set up)
 
   /** Ease an element's brightness from → to over SWAP_FADE_MS. */
   const fadeTo = (elm: HTMLElement, from: string, to: string) => {
@@ -130,6 +169,121 @@ export function createPrompterView(
 
   let flowState: FlowState = 'idle';
   let phraseIndex = 0;
+
+  /* ---- column machinery ------------------------------------------- */
+  /** px height of one line (every phrase is exactly one nowrap line —
+      the width-fit cap guarantees it) */
+  let colLineH = 0;
+  let colAnchorY = 0;
+  const colAnchorFrac =
+    settings.mirrorH || settings.mirrorV ? ANCHOR_RIG : ANCHOR_DIRECT;
+  const colLines: HTMLElement[] = [];
+  if (isColumn) {
+    for (const ph of phrases) {
+      const line = document.createElement('div');
+      line.className = 'vp-colline';
+      renderPhrase(line, ph);
+      colEl.appendChild(line);
+      colLines.push(line);
+    }
+  }
+
+  /** measure + re-anchor + re-mask (resize / font change); instant */
+  const colLayout = () => {
+    if (!isColumn || colLines.length === 0) return;
+    colLineH = colLines[0].offsetHeight || 1;
+    colAnchorY = Math.round(window.innerHeight * colAnchorFrac);
+    const half = (COLUMN_WINDOW / 2) * colLineH;
+    const mask = `linear-gradient(to bottom, transparent ${colAnchorY - half - colLineH}px, black ${colAnchorY - half}px, black ${colAnchorY + half}px, transparent ${colAnchorY + half + colLineH}px)`;
+    colViewport.style.maskImage = mask;
+    colViewport.style.webkitMaskImage = mask;
+    colPosition(false);
+  };
+
+  /** translate so the active line's CENTER sits exactly at the anchor */
+  const colTranslateFor = (active: number): number =>
+    Math.round(colAnchorY - colLineH / 2 - active * colLineH);
+
+  let colShownIndex = 0;
+  let colStepTimer: ReturnType<typeof setTimeout> | null = null;
+
+  /** Reposition the column for phraseIndex. Animated = the ONE
+      discrete step per voice-driven advance (collapse and far-skips
+      arrive here as a single longer step — the controller already
+      collapsed them); everything else is instant. Tiers crossfade
+      alongside the step. */
+  const colPosition = (animate: boolean) => {
+    const from = colShownIndex;
+    const to = phraseIndex;
+    const y = colTranslateFor(to);
+    const lines = Math.abs(to - from);
+    const glide = animate && !reduceMotion && lines > 0;
+    const dur = glide ? columnStepMs(lines) : 0;
+    colEl.style.transition = glide
+      ? `transform ${dur}ms cubic-bezier(0, 0, 0.2, 1)`
+      : 'none';
+    colEl.style.transform = `translateY(${y}px)`;
+    for (let i = 0; i < colLines.length; i++) {
+      const line = colLines[i];
+      const tier = columnTier(i - to);
+      line.style.transition = animate ? `opacity ${SWAP_FADE_MS}ms ease` : 'none';
+      line.style.opacity = String(tier);
+      line.style.fontWeight = i === to ? '700' : '600';
+    }
+    if (glide) {
+      const distancePx = Math.abs(colTranslateFor(from) - y);
+      controller.recorder.motion('step-start', from, to, distancePx, dur);
+      if (colStepTimer) clearTimeout(colStepTimer);
+      colStepTimer = setTimeout(() => {
+        colStepTimer = null;
+        controller.recorder.motion('step-end', from, to, distancePx, dur);
+      }, dur);
+    }
+    colShownIndex = to;
+  };
+
+  applySize();
+  window.addEventListener('resize', applySize);
+  // the view is constructed DETACHED (show() appends it afterwards),
+  // so line heights measure 0 here — re-measure and re-anchor on the
+  // first attached frame, before the reader can notice
+  if (isColumn) setTimeout(colLayout, 0);
+
+  /** column render truth: the ±3 window's tiers, and post-settle the
+      ACTIVE line's px offset from the anchor (dy) — position is now
+      asserted, not assumed */
+  const colWindow = (active: number): number[] => {
+    const out: number[] = [];
+    for (let i = Math.max(0, active - 3); i <= Math.min(phrases.length - 1, active + 3); i++) out.push(i);
+    return out;
+  };
+  const colLogRender = () => {
+    const seq = ++renderSeq;
+    const active = phraseIndex;
+    controller.recorder.render(
+      'target', active,
+      colWindow(active).map((i) => ({ p: i, tier: columnTier(i - active) })),
+    );
+    setTimeout(() => {
+      if (seq !== renderSeq) return;
+      controller.recorder.render(
+        'settled', active,
+        colWindow(active).map((i) => {
+          const line = colLines[i];
+          const entry: { p: number; tier: number; text?: string; dy?: number } = {
+            p: i,
+            tier: Math.round((parseFloat(getComputedStyle(line).opacity) || 0) * 100) / 100,
+            text: (line.textContent ?? '').slice(0, 24),
+          };
+          if (i === active) {
+            const r = line.getBoundingClientRect();
+            entry.dy = Math.round((r.top + r.height / 2 - colAnchorY) * 10) / 10;
+          }
+          return entry;
+        }),
+      );
+    }, Math.max(columnStepMs(9), SWAP_FADE_MS) + 150);
+  };
 
   /** which phrase each slot displays (-1 = dark/empty) */
   const slotShows = [-1, -1, -1];
@@ -302,11 +456,13 @@ export function createPrompterView(
   const header: SessionHeader = {
     displayMode,
     crossfadeMs: SWAP_FADE_MS,
-    brightness: {
-      active: 1,
-      next: settings.previewOpacity,
-      ...(SLOTS === 3 ? { nextNext: NEXT_NEXT_DIM } : {}),
-    },
+    brightness: isColumn
+      ? { active: 1, next: 0.65, nextNext: 0.4 }
+      : {
+          active: 1,
+          next: settings.previewOpacity,
+          ...(SLOTS === 3 ? { nextNext: NEXT_NEXT_DIM } : {}),
+        },
     fontPx: fitFontPx(),
     distanceFt: settings.distanceFt,
     sizeMult: settings.sizeMult,
@@ -325,6 +481,22 @@ export function createPrompterView(
       phraseIndex = i;
       const finished = cur === null;
       doneEl.hidden = !finished;
+      if (isColumn) {
+        colViewport.hidden = finished;
+        if (finished) {
+          paintStatus();
+          return;
+        }
+        // ONE discrete step to the fixed anchor per voice-driven
+        // advance (the controller already collapsed gulps to a single
+        // final target — a catch-up is one longer step, never a
+        // cascade); everything else repositions instantly. Holds and
+        // ad-libs never reach here: zero drift.
+        colPosition(swapped);
+        paintStatus();
+        colLogRender();
+        return;
+      }
       blockEl.hidden = finished;
       if (finished) {
         if (refillTimer) clearTimeout(refillTimer);

@@ -34,9 +34,14 @@ export interface Settings {
   /** Speech engine: web (Safari API) or native (iPad app, on-device). */
   engine: 'web' | 'native';
   /** Display pattern: ladder (3 slots, strictly downward with a wrap
-      to the top — the B.3.4 A/B verdict, "far preferred") or karaoke
-      (2 slots, alternating). */
-  displayMode: 'karaoke' | 'ladder';
+      to the top — the B.3.4 A/B verdict; default pending the column
+      A/B), karaoke (2 slots, alternating), or column (Erika's
+      second-voice design: full-script gradient column, active line
+      pinned at a fixed reading anchor, ONE discrete step per
+      voice-driven advance). */
+  displayMode: 'karaoke' | 'ladder' | 'column';
+  /** Column steps reposition instantly (no glide), crossfade only. */
+  reduceMotion?: boolean;
   /** pt-BR ship-gate fallback (no UI — dev flag): server-assisted
       recognition for PT only. EN stays fully on-device, always. */
   ptServerAssisted?: boolean;

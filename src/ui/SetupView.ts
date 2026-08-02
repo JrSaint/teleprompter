@@ -20,6 +20,7 @@ export interface SetupCallbacks {
 const CHECKLIST = [
   'Three lines, read downward, wrap to the top like a new page — speak straight through at your own pace',
   'EN swaps on your rhythm (Flow); PT waits for confirmed words (Lead) until its engine is cured',
+  'Column mode: the bright line never moves — the script comes to you, one step per phrase',
   'iPad brightness at maximum',
   'Auto-Lock off (Settings › Display & Brightness)',
   'Rig hood zipped, glass clean, camera centered',
@@ -180,13 +181,18 @@ export function createSetupView(
       <label class="su-row"><span>Display</span>
         <select id="set-display">
           <option value="ladder" ${settings.displayMode === 'ladder' ? 'selected' : ''}>Ladder (3 lines)</option>
+          <option value="column" ${settings.displayMode === 'column' ? 'selected' : ''}>Column (stepped)</option>
           <option value="karaoke" ${settings.displayMode === 'karaoke' ? 'selected' : ''}>Karaoke (2 lines)</option>
         </select></label>
       <div class="su-engine-hint">${
-        settings.displayMode === 'ladder'
+        settings.displayMode === 'column'
+          ? 'Column: the whole script in a dimmed column; the bright line stays pinned at your reading height — one gentle step per phrase, still only when you speak.'
+          : settings.displayMode === 'ladder'
           ? 'Ladder: three fixed lines read strictly downward, then the reading position sweeps back to the top — like lines of a book.'
           : 'Karaoke: two fixed lines; the line being read brightens in place and the other previews what comes next.'
       }</div>
+      <label class="su-row su-toggle"><span>Reduce motion (column steps snap)</span>
+        <input type="checkbox" id="set-reduce" ${settings.reduceMotion ? 'checked' : ''}></label>
       <label class="su-row"><span>Preview brightness <b>${Math.round(settings.previewOpacity * 100)}%</b></span>
         <input type="range" id="set-preview" min="30" max="80" step="5" value="${Math.round(settings.previewOpacity * 100)}"></label>
       <label class="su-row"><span>Speech engine</span>
@@ -219,6 +225,10 @@ export function createSetupView(
     };
     (card.querySelector('#set-diag') as HTMLInputElement).onchange = (e) => {
       settings.diagOverlay = (e.target as HTMLInputElement).checked;
+      void persistSettings();
+    };
+    (card.querySelector('#set-reduce') as HTMLInputElement).onchange = (e) => {
+      settings.reduceMotion = (e.target as HTMLInputElement).checked;
       void persistSettings();
     };
     (card.querySelector('#set-swap-en') as HTMLSelectElement).onchange = (e) => {

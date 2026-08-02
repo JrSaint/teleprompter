@@ -121,6 +121,23 @@ button { font: inherit; color: inherit; background: none; border: none; cursor: 
   min-height: 1.25em; /* an empty slot still holds its line */
   /* mixed case, heavy sans, max legibility — locked */
 }
+/* Column mode: the whole script as one gradient column; the active
+   line is pinned at a fixed reading anchor and the column takes ONE
+   discrete ease-out step per voice-driven advance (design-law
+   amendment: text is never in motion while being read; between
+   phrases the column may take one discrete animated step to the
+   fixed anchor). Edges fade to black via a JS-computed mask. */
+#vp-colvp { position: absolute; inset: 0; overflow: hidden; }
+#vp-col {
+  position: absolute; left: 0; right: 0; top: 0;
+  text-align: center; padding: 0 6vw;
+  line-height: 1.25; will-change: transform;
+}
+.vp-colline {
+  font-weight: 600; color: #fff; white-space: nowrap;
+  min-height: 1.25em;
+}
+
 #vp-done {
   position: absolute; inset: 0; display: flex; align-items: center;
   justify-content: center; color: #8e8e93; font-size: 5vh;

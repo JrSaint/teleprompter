@@ -18,7 +18,7 @@ type RenderEvent = {
   kind: 'render';
   phase: 'target' | 'settled';
   active: number;
-  slots: Array<{ p: number; tier: number; text?: string }>;
+  slots: Array<{ p: number; tier: number; text?: string; dy?: number }>;
   t: number;
 };
 
@@ -37,6 +37,15 @@ describe('render truth', () => {
         expect(slot, `render@${r.t} (${r.phase}): no slot shows active ${r.active}`).toBeTruthy();
         expect(slot!.tier, `render@${r.t} (${r.phase}): active ${r.active} at tier ${slot!.tier}`)
           .toBeGreaterThanOrEqual(0.99);
+        if (r.phase === 'settled' && slot!.dy !== undefined) {
+          // column mode: the active line must SIT at the reading
+          // anchor once settled (±2px) — position is asserted, not
+          // assumed
+          expect(
+            Math.abs(slot!.dy),
+            `render@${r.t}: active ${r.active} settled ${slot!.dy}px off anchor`,
+          ).toBeLessThanOrEqual(2);
+        }
         if (r.phase === 'settled' && slot!.text) {
           const want = stripMarkup(log.phrases![r.active] ?? '').trim();
           expect(
