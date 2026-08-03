@@ -63,10 +63,17 @@ const GLIDE_STOP_MS = 450;
     p90 inter-token gap (589ms on the healthy tapes), so mid-phrase
     stutter never brakes the column but real silence reads fast */
 const GLIDE_SPEAK_WINDOW_MS = 950;
-/** anchor band half-width, in line-heights (the truth condition) */
-const GLIDE_BAND_LH = 0.5;
-/** velocity clamp, × base pace */
-const GLIDE_MAX_X = 1.5;
+/** comfort band half-width, in line-heights: NO correction inside
+    it — base drift alone carries the pace (glide-refinement cure) */
+const GLIDE_COMFORT_LH = 0.75;
+/** truth band for settle assertions (comfort + settle-lag margin) */
+const GLIDE_BAND_LH = 0.9;
+/** error correction is a gentle continuous bias, capped here —
+    never a step change in commanded velocity */
+const GLIDE_BIAS_MAX = 0.15;
+/** rate-model updates blend into the base velocity over ~this long
+    instead of snapping the target */
+const GLIDE_RATE_BLEND_S = 1.0;
 /** error beyond this many lines: one eased reposition, never a
     sustained sprint */
 const GLIDE_REPOSITION_LINES = 2;
@@ -105,7 +112,7 @@ export function createPrompterView(
         <div class="vp-slot" id="vp-slot1"></div>
         <div class="vp-slot" id="vp-slot2"></div>
       </div>
-      <div id="vp-colvp" hidden><div id="vp-col"></div><div id="vp-lum"></div></div>
+      <div id="vp-colvp" hidden><div id="vp-col"></div><div id="vp-lum"></div><div id="vp-fade-top"></div><div id="vp-fade-bottom"></div></div>
       <div id="vp-done" hidden>— end of script —</div>
     </div>
     <div id="vp-status"></div>
@@ -238,23 +245,28 @@ export function createPrompterView(
   const lumEl = $('vp-lum');
   const colBrightness = (distLh: number): number =>
     Math.max(COLUMN_FLOOR, Math.exp(-0.45 * Math.pow(Math.abs(distLh), 1.3)));
+  /** The edge fades are the two dedicated divs (always on, both
+      column modes). #vp-lum carries ONLY glide's continuous
+      positional dimming curve, built from the brightness function —
+      modest stop count, screen-fixed, never repaints. */
   const buildLum = () => {
-    const H = window.innerHeight;
-    const stops: string[] = ['rgba(0,0,0,1) 0px'];
-    if (isGlide) {
-      for (let y = Math.max(0, colAnchorY - 6 * colLineH); y <= Math.min(H, colAnchorY + 6 * colLineH); y += Math.max(8, colLineH / 4)) {
-        const edge = Math.min(y, H - y) < H * 0.12 ? 0.5 : 0; // extra edge sink
-        const a = Math.min(1, 1 - colBrightness((y - colAnchorY) / colLineH) + edge);
-        stops.push(`rgba(0,0,0,${Math.round(a * 1000) / 1000}) ${Math.round(y)}px`);
-      }
-    } else {
-      // step mode: per-line tiers carry the emphasis; the overlay is
-      // only the full-bleed edge fade
-      stops.push(`rgba(0,0,0,0) ${Math.round(H * 0.14)}px`);
-      stops.push(`rgba(0,0,0,0) ${Math.round(H * 0.86)}px`);
+    if (!isGlide) {
+      lumEl.style.background = 'none';
+      return;
     }
-    stops.push(`rgba(0,0,0,1) ${window.innerHeight}px`);
+    const H = window.innerHeight;
+    const stops: string[] = [];
+    const span = 5 * colLineH;
+    stops.push(`rgba(0,0,0,${1 - COLUMN_FLOOR}) 0px`);
+    for (let d = -5; d <= 5; d += 0.5) {
+      const y = colAnchorY + d * colLineH;
+      if (y < 0 || y > H) continue;
+      const a = Math.round((1 - colBrightness(d)) * 1000) / 1000;
+      stops.push(`rgba(0,0,0,${a}) ${Math.round(y)}px`);
+    }
+    stops.push(`rgba(0,0,0,${1 - COLUMN_FLOOR}) ${H}px`);
     lumEl.style.background = `linear-gradient(to bottom, ${stops.join(', ')})`;
+    void span;
   };
 
   /** measure + re-anchor (resize / font change); instant. */
@@ -329,6 +341,8 @@ export function createPrompterView(
   /* ---- glide velocity loop ---------------------------------------- */
   let glidePos = 0;
   let glideV = 0;
+  let glideBase = 0;
+  let glideCorr = 0;
   let glideMoving = false;
   let glideRaf = 0;
   let glideLastT = 0;
@@ -373,6 +387,7 @@ export function createPrompterView(
     if (glideRepositioning || doneEl.hidden === false) return;
     const dt = Math.min(0.05, frameMs / 1000);
     const err = glideError(); // px still to travel (≥0 when behind)
+    const errLh = err / colLineH;
     if (err > GLIDE_REPOSITION_LINES * colLineH) {
       glideReposition(GLIDE_REPOSITION_MS);
       return;
@@ -381,18 +396,33 @@ export function createPrompterView(
     const speaking =
       flowState === 'following' &&
       performance.now() - controller.lastMatchedAt < GLIDE_SPEAK_WINDOW_MS;
+    // rate-model updates BLEND into the base over ~1s — never a snap
     const rate = controller.paceMsPerWord() ?? GLIDE_COLD_RATE_MS;
     const words = Math.max(2, phrases[phraseIndex]?.contentIdx.length ?? 4);
-    const base = colLineH / ((rate * words) / 1000); // px/s at the reader's pace
-    const vTarget = speaking && err > 2
-      ? Math.min(GLIDE_MAX_X * base, base * (0.5 + err / colLineH))
-      : 0; // never negative; silence/hold: stop
+    const baseInstant = colLineH / ((rate * words) / 1000);
+    glideBase += (baseInstant - glideBase) * Math.min(1, dt / GLIDE_RATE_BLEND_S);
+    // correction is a gentle continuous bias, only OUTSIDE the
+    // comfort band, capped at 15% — inside the band, base drift
+    // alone carries the pace (no per-advance command step)
+    glideCorr = errLh > GLIDE_COMFORT_LH
+      ? Math.min(GLIDE_BIAS_MAX, (errLh - GLIDE_COMFORT_LH) * 0.2)
+      : 0;
+    // soft floor: the command fades to zero across the band's lower
+    // half — the column glides THROUGH the anchor and eases out; the
+    // old hard clamp AT the anchor was the breathing's second half
+    // (dead stop at the wall, surge after the next advance)
+    const floorK = Math.max(0, Math.min(1, (errLh + GLIDE_COMFORT_LH) / 0.5));
+    const vTarget = speaking ? glideBase * (1 + glideCorr) * floorK : 0;
+    // ONE slew limiter governs every velocity change — no bypasses
     const decelCap = Math.max(GLIDE_ACCEL, glideV / (GLIDE_STOP_MS / 1000));
     const dv = Math.max(-decelCap * dt, Math.min(GLIDE_ACCEL * dt, vTarget - glideV));
     glideV = Math.max(0, glideV + dv);
     if (glideV < 0.5 && vTarget === 0) glideV = 0;
     if (glideV > 0) {
-      glidePos = Math.max(colTranslateFor(phraseIndex), glidePos - glideV * dt);
+      glidePos -= glideV * dt;
+      // absolute backstop at the band floor (still never backward)
+      const floorPos = colTranslateFor(phraseIndex) - GLIDE_COMFORT_LH * colLineH;
+      if (glidePos < floorPos) glidePos = floorPos;
       applyGlidePos();
     }
     if (glideV > 0 && !glideMoving) {
@@ -404,7 +434,11 @@ export function createPrompterView(
     }
     if (glideMoving && now - lastVSampleAt > 1000) {
       lastVSampleAt = now;
-      controller.recorder.glide('v', { v: Math.round(glideV), dy: Math.round(glideError()) });
+      controller.recorder.glide('v', {
+        v: Math.round(glideV),
+        dy: Math.round(glideError()),
+        corr: Math.round(glideCorr * 1000) / 1000,
+      });
     }
   };
   if (isGlide) glideRaf = requestAnimationFrame(glideFrame);
@@ -433,6 +467,8 @@ export function createPrompterView(
     );
     setTimeout(() => {
       if (seq !== renderSeq) return;
+      const fadeTop = $('vp-fade-top').getBoundingClientRect().height;
+      const fadeBottom = $('vp-fade-bottom').getBoundingClientRect().height;
       controller.recorder.render(
         'settled', active,
         colWindow(active).map((i) => {
@@ -458,6 +494,7 @@ export function createPrompterView(
           }
           return entry;
         }),
+        { top: Math.round(fadeTop), bottom: Math.round(fadeBottom) },
       );
     }, Math.max(columnStepMs(9), SWAP_FADE_MS) + 150);
   };

@@ -51,6 +51,10 @@ export type SessionEvent =
       /** band: glide's anchor half-width in px — |dy| ≤ band is the
           truth condition while following (step asserts ±2px). */
       slots: Array<{ p: number; tier: number; text?: string; dy?: number; band?: number }>;
+      /** measured px heights of the stationary edge-fade layers at
+          settle time — fade PRESENCE is asserted, not assumed (the
+          zero-height-overlay regression class). */
+      fade?: { top: number; bottom: number };
     }
   | {
       t: number; kind: 'glide';
@@ -62,6 +66,9 @@ export type SessionEvent =
       v: number;
       dy?: number;
       frameMs?: number;
+      /** correction-bias fraction in force (≤0.15) — the tape shows
+          corrections shrinking below perceptibility */
+      corr?: number;
     }
   | {
       t: number; kind: 'motion';
@@ -219,8 +226,9 @@ export class FlightRecorder {
     phase: 'target' | 'settled',
     active: number,
     slots: Array<{ p: number; tier: number; text?: string; dy?: number; band?: number }>,
+    fade?: { top: number; bottom: number },
   ): void {
-    this.push({ kind: 'render', phase, active, slots });
+    this.push({ kind: 'render', phase, active, slots, ...(fade ? { fade } : {}) });
   }
 
   motion(
@@ -233,7 +241,7 @@ export class FlightRecorder {
 
   glide(
     phase: 'start' | 'stop' | 'v' | 'jank' | 'reposition',
-    fields: { v: number; dy?: number; frameMs?: number },
+    fields: { v: number; dy?: number; frameMs?: number; corr?: number },
   ): void {
     this.push({ kind: 'glide', phase, ...fields });
   }

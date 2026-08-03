@@ -19,6 +19,7 @@ type RenderEvent = {
   phase: 'target' | 'settled';
   active: number;
   slots: Array<{ p: number; tier: number; text?: string; dy?: number; band?: number }>;
+  fade?: { top: number; bottom: number };
   t: number;
 };
 
@@ -45,6 +46,12 @@ describe('render truth', () => {
             Math.abs(slot!.dy),
             `render@${r.t}: active ${r.active} settled ${slot!.dy}px off anchor`,
           ).toBeLessThanOrEqual(slot!.band ?? 2);
+        }
+        if (r.phase === 'settled' && r.fade) {
+          // fade PRESENCE is asserted — the invisible zero-height
+          // overlay regression can never ship silently again
+          expect(r.fade.top, `render@${r.t}: top fade collapsed`).toBeGreaterThan(0);
+          expect(r.fade.bottom, `render@${r.t}: bottom fade collapsed`).toBeGreaterThan(0);
         }
         if (r.phase === 'settled' && slot!.text) {
           const want = stripMarkup(log.phrases![r.active] ?? '').trim();

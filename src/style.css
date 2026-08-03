@@ -161,15 +161,23 @@ button { font: inherit; color: inherit; background: none; border: none; cursor: 
    amendment: text is never in motion while being read; between
    phrases the column may take one discrete animated step to the
    fixed anchor). Edges fade to black via a JS-computed mask. */
-#vp-colvp {
-  position: absolute; inset: 0; overflow: hidden;
-  /* full-bleed: the column fills the screen; luminance fades to pure
-     black at both edges — positional, independent of line count */
-  -webkit-mask-image: linear-gradient(to bottom,
-    transparent 0, black 14%, black 86%, transparent 100%);
-  mask-image: linear-gradient(to bottom,
-    transparent 0, black 14%, black 86%, transparent 100%);
+#vp-colvp { position: absolute; inset: 0; overflow: hidden; }
+/* Stationary fade + luminance layers (glide-refinement conviction:
+   the old mask-image over a composited child is unreliable on device
+   WebKit, and the JS overlay had shipped with NO positioning — a
+   zero-height invisible div). These are plain gradient DIVS pinned
+   above the moving column: crude, bulletproof, composited
+   independently, zero per-frame repaints. */
+#vp-lum {
+  position: absolute; inset: 0; pointer-events: none;
+  transform: translateZ(0);
 }
+#vp-fade-top, #vp-fade-bottom {
+  position: absolute; left: 0; right: 0; height: 14vh;
+  pointer-events: none; transform: translateZ(0);
+}
+#vp-fade-top { top: 0; background: linear-gradient(to bottom, #000 0%, rgba(0,0,0,0) 100%); }
+#vp-fade-bottom { bottom: 0; background: linear-gradient(to top, #000 0%, rgba(0,0,0,0) 100%); }
 #vp-col {
   position: absolute; left: 0; right: 0; top: 0;
   text-align: center; padding: 0 6vw;
