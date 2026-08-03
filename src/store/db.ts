@@ -51,6 +51,9 @@ export interface Settings {
       advance. Default glide; the founder+Erika A/B picks the final
       default. reduceMotion forces step with instant repositions. */
   columnMotion?: 'glide' | 'step';
+  /** Glide pace trim, 0.9–1.3 (90–130%): scales the base rate to the
+      reader's taste (founder ≠ Erika). */
+  glidePace?: number;
   /** Column repositions instantly (no animation), crossfade only. */
   reduceMotion?: boolean;
   /** pt-BR ship-gate fallback (no UI — dev flag): server-assisted

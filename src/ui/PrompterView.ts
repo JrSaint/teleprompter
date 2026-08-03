@@ -55,8 +55,13 @@ const ANCHOR_DIRECT = 0.42;
    velocity loop holds the active line inside an anchor band; voice
    is the governor — silence decelerates to a full stop and the
    column NEVER moves while the reader is silent. --------------- */
-/** acceleration cap, px/s² — speed changes stay imperceptible */
-const GLIDE_ACCEL = 90;
+/** slew caps, px/s² — asymmetric: catching up from behind may build
+    speed a bit quicker than easing back from ahead (trailing feels
+    worse than slight lead); every change still slews, no steps */
+const GLIDE_ACCEL_UP = 120;
+const GLIDE_ACCEL_DOWN = 90;
+/** behind the comfort band the bias cap rises (catch-up urgency) */
+const GLIDE_BIAS_MAX_BEHIND = 0.25;
 /** silence → full stop within this */
 const GLIDE_STOP_MS = 450;
 /** a matched token this recent means "speaking" — just above the
@@ -68,9 +73,6 @@ const GLIDE_SPEAK_WINDOW_MS = 950;
 const GLIDE_COMFORT_LH = 0.75;
 /** truth band for settle assertions (comfort + settle-lag margin) */
 const GLIDE_BAND_LH = 0.9;
-/** error correction is a gentle continuous bias, capped here —
-    never a step change in commanded velocity */
-const GLIDE_BIAS_MAX = 0.15;
 /** rate-model updates blend into the base velocity over ~this long
     instead of snapping the target */
 const GLIDE_RATE_BLEND_S = 1.0;
@@ -343,6 +345,9 @@ export function createPrompterView(
   let glideV = 0;
   let glideBase = 0;
   let glideCorr = 0;
+  /** predictive-target lead over the confirmed position, px */
+  let glidePred = 0;
+  let lastAdvanceAt = 0;
   let glideMoving = false;
   let glideRaf = 0;
   let glideLastT = 0;
@@ -356,7 +361,8 @@ export function createPrompterView(
     colEl.style.transition = 'none';
     colEl.style.transform = `translate3d(0, ${Math.round(glidePos * 10) / 10}px, 0)`;
   };
-  const glideError = (): number => glidePos - colTranslateFor(phraseIndex);
+  const glideError = (): number =>
+    glidePos - (colTranslateFor(phraseIndex) - glidePred);
 
   /** far-skip / deep catch-up: ONE eased reposition, never a sprint */
   const glideReposition = (ms: number) => {
@@ -386,43 +392,62 @@ export function createPrompterView(
     } else jankStreak = 0;
     if (glideRepositioning || doneEl.hidden === false) return;
     const dt = Math.min(0.05, frameMs / 1000);
-    const err = glideError(); // px still to travel (≥0 when behind)
+    // voice is the governor: fresh matched speech while following
+    const speaking =
+      flowState === 'following' &&
+      performance.now() - controller.lastMatchedAt < GLIDE_SPEAK_WINDOW_MS;
+    // rate-model updates BLEND into the base over ~1s — never a snap.
+    // The user's pace trim (90–130%) scales the base to taste.
+    const rate = controller.paceMsPerWord() ?? GLIDE_COLD_RATE_MS;
+    const words = Math.max(2, phrases[phraseIndex]?.contentIdx.length ?? 4);
+    const phraseDurMs = rate * words;
+    const trim = Math.min(1.3, Math.max(0.9, settings.glidePace ?? 1));
+    const baseInstant = (colLineH / (phraseDurMs / 1000)) * trim;
+    glideBase += (baseInstant - glideBase) * Math.min(1, dt / GLIDE_RATE_BLEND_S);
+    // PREDICTIVE TARGET (glide-pace sprint): aim where the voice IS,
+    // not where the engine last reported — estimated live position =
+    // last confirmed + elapsed × pace, hard-capped at +1 phrase past
+    // evidence (the Flow rail), suppressed exactly like flow-predict
+    // (unmatched tokens, holding, silence → freeze at confirmed),
+    // and never backward (position only ever moves forward).
+    const predictOk = speaking && !controller.flowSuspended();
+    glidePred = predictOk
+      ? Math.min(1, Math.max(0, (performance.now() - lastAdvanceAt) / Math.max(300, phraseDurMs))) * colLineH
+      : 0;
+    const confirmedPx = colTranslateFor(phraseIndex);
+    const targetPx = confirmedPx - glidePred;
+    const err = glidePos - targetPx; // px still to travel (≥0 when behind)
     const errLh = err / colLineH;
     if (err > GLIDE_REPOSITION_LINES * colLineH) {
       glideReposition(GLIDE_REPOSITION_MS);
       return;
     }
-    // voice is the governor: fresh matched speech while following
-    const speaking =
-      flowState === 'following' &&
-      performance.now() - controller.lastMatchedAt < GLIDE_SPEAK_WINDOW_MS;
-    // rate-model updates BLEND into the base over ~1s — never a snap
-    const rate = controller.paceMsPerWord() ?? GLIDE_COLD_RATE_MS;
-    const words = Math.max(2, phrases[phraseIndex]?.contentIdx.length ?? 4);
-    const baseInstant = colLineH / ((rate * words) / 1000);
-    glideBase += (baseInstant - glideBase) * Math.min(1, dt / GLIDE_RATE_BLEND_S);
     // correction is a gentle continuous bias, only OUTSIDE the
-    // comfort band, capped at 15% — inside the band, base drift
-    // alone carries the pace (no per-advance command step)
+    // comfort band — capped (higher cap when trailing: catching up
+    // from behind matters more than easing back from ahead)
     glideCorr = errLh > GLIDE_COMFORT_LH
-      ? Math.min(GLIDE_BIAS_MAX, (errLh - GLIDE_COMFORT_LH) * 0.2)
+      ? Math.min(GLIDE_BIAS_MAX_BEHIND, (errLh - GLIDE_COMFORT_LH) * 0.25)
       : 0;
     // soft floor: the command fades to zero across the band's lower
-    // half — the column glides THROUGH the anchor and eases out; the
-    // old hard clamp AT the anchor was the breathing's second half
-    // (dead stop at the wall, surge after the next advance)
+    // half — the column glides THROUGH the target and eases out
     const floorK = Math.max(0, Math.min(1, (errLh + GLIDE_COMFORT_LH) / 0.5));
     const vTarget = speaking ? glideBase * (1 + glideCorr) * floorK : 0;
-    // ONE slew limiter governs every velocity change — no bypasses
-    const decelCap = Math.max(GLIDE_ACCEL, glideV / (GLIDE_STOP_MS / 1000));
-    const dv = Math.max(-decelCap * dt, Math.min(GLIDE_ACCEL * dt, vTarget - glideV));
+    // ONE slew limiter governs every velocity change — asymmetric
+    // caps, no bypass paths, no steps
+    const decelCap = Math.max(GLIDE_ACCEL_DOWN, glideV / (GLIDE_STOP_MS / 1000));
+    const dv = Math.max(-decelCap * dt, Math.min(GLIDE_ACCEL_UP * dt, vTarget - glideV));
     glideV = Math.max(0, glideV + dv);
     if (glideV < 0.5 && vTarget === 0) glideV = 0;
     if (glideV > 0) {
-      glidePos -= glideV * dt;
-      // absolute backstop at the band floor (still never backward)
-      const floorPos = colTranslateFor(phraseIndex) - GLIDE_COMFORT_LH * colLineH;
-      if (glidePos < floorPos) glidePos = floorPos;
+      let next = glidePos - glideV * dt;
+      // backstop at the band floor below the predicted target — it
+      // limits FORWARD travel only. When suppression collapses the
+      // prediction the floor rises; snapping the column up to it
+      // would be a backward jump (harness caught exactly that), so
+      // an already-past position simply stops instead.
+      const floorPos = targetPx - GLIDE_COMFORT_LH * colLineH;
+      if (next < floorPos) next = Math.min(glidePos, floorPos);
+      glidePos = next;
       applyGlidePos();
     }
     if (glideV > 0 && !glideMoving) {
@@ -438,6 +463,7 @@ export function createPrompterView(
         v: Math.round(glideV),
         dy: Math.round(glideError()),
         corr: Math.round(glideCorr * 1000) / 1000,
+        pred: Math.round(glidePred),
       });
     }
   };
@@ -487,9 +513,11 @@ export function createPrompterView(
           };
           if (i === active) {
             const r = line.getBoundingClientRect();
-            entry.dy = Math.round((r.top + r.height / 2 - colAnchorY) * 10) / 10;
-            // glide truth: within the anchor band while following;
-            // step truth stays ±2px at rest
+            // glide truth measures against the PREDICTED target (the
+            // anchor minus the current predictive lead); step truth
+            // stays the anchor itself, ±2px at rest
+            const ref = isGlide ? colAnchorY - glidePred : colAnchorY;
+            entry.dy = Math.round((r.top + r.height / 2 - ref) * 10) / 10;
             if (isGlide) entry.band = Math.round(GLIDE_BAND_LH * colLineH);
           }
           return entry;
@@ -670,6 +698,7 @@ export function createPrompterView(
   const header: SessionHeader = {
     displayMode,
     ...(isColumn ? { columnMotion } : {}),
+    ...(isGlide ? { glidePace: Math.min(1.3, Math.max(0.9, settings.glidePace ?? 1)) } : {}),
     crossfadeMs: SWAP_FADE_MS,
     brightness: isColumn
       ? { active: 1, next: 0.65, nextNext: 0.4 }
@@ -706,6 +735,7 @@ export function createPrompterView(
           // the velocity loop owns motion; advances only move the
           // TARGET. Backward (manual prev) is a discrete user step;
           // deep catch-ups get one eased reposition from the loop.
+          if (swapped && i > prev) lastAdvanceAt = performance.now();
           if (!swapped) {
             glidePos = colTranslateFor(phraseIndex);
             applyGlidePos();

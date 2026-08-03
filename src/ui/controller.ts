@@ -467,6 +467,12 @@ export class PrompterController {
     return this.flowModel.medianRate();
   }
 
+  /** Unmatched-token suspension (the Flow rail) — Glide's predictive
+      target freezes under exactly the same condition. */
+  flowSuspended(): boolean {
+    return this.flowModel.suspended;
+  }
+
   /** One reason line per phrase+cause: why prediction is currently
       impossible — stall audits classify rail suppression from the
       tape instead of guessing (B.3.5 finding 2). */

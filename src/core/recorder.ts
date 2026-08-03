@@ -66,9 +66,12 @@ export type SessionEvent =
       v: number;
       dy?: number;
       frameMs?: number;
-      /** correction-bias fraction in force (≤0.15) — the tape shows
+      /** correction-bias fraction in force — the tape shows
           corrections shrinking below perceptibility */
       corr?: number;
+      /** predictive-target lead over the confirmed position, px —
+          target-vs-confirmed offset on tape */
+      pred?: number;
     }
   | {
       t: number; kind: 'motion';
@@ -116,6 +119,8 @@ export interface SessionHeader {
   /** column only: which motion mode ran (the Glide/Step A/B needs
       the tape to say) */
   columnMotion?: 'glide' | 'step';
+  /** glide pace trim in force (0.9–1.3) */
+  glidePace?: number;
   crossfadeMs: number;
   /** slot brightness levels: active / next / (ladder) next-next */
   brightness: { active: number; next: number; nextNext?: number };
@@ -241,7 +246,7 @@ export class FlightRecorder {
 
   glide(
     phase: 'start' | 'stop' | 'v' | 'jank' | 'reposition',
-    fields: { v: number; dy?: number; frameMs?: number; corr?: number },
+    fields: { v: number; dy?: number; frameMs?: number; corr?: number; pred?: number },
   ): void {
     this.push({ kind: 'glide', phase, ...fields });
   }

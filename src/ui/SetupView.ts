@@ -206,6 +206,8 @@ export function createSetupView(
         reading pace and freezes the instant you stop speaking; Step
         takes one discrete step per phrase. Reduce motion forces Step
         with instant snaps.</div>
+      <label class="su-row"><span>Glide pace <b id="lbl-glidepace">${Math.round((settings.glidePace ?? 1) * 100)}%</b></span>
+        <input type="range" id="set-glidepace" min="90" max="130" step="5" value="${Math.round((settings.glidePace ?? 1) * 100)}"></label>
       <label class="su-row su-toggle"><span>Reduce motion (column snaps, no animation)</span>
         <input type="checkbox" id="set-reduce" ${settings.reduceMotion ? 'checked' : ''}></label>
       <label class="su-row"><span>Preview brightness <b id="lbl-preview">${Math.round(settings.previewOpacity * 100)}%</b></span>
@@ -253,6 +255,12 @@ export function createSetupView(
     };
     (card.querySelector('#set-diag') as HTMLInputElement).onchange = (e) => {
       settings.diagOverlay = (e.target as HTMLInputElement).checked;
+      void persistSettings();
+    };
+    (card.querySelector('#set-glidepace') as HTMLInputElement).oninput = (e) => {
+      settings.glidePace = parseInt((e.target as HTMLInputElement).value, 10) / 100;
+      (card.querySelector('#lbl-glidepace') as HTMLElement).textContent =
+        `${Math.round(settings.glidePace * 100)}%`;
       void persistSettings();
     };
     (card.querySelector('#set-colmotion') as HTMLSelectElement).onchange = (e) => {
